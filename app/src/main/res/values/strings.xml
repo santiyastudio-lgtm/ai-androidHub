@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">SantiyaLocalAiHub</string>
+    <string name="service_name">Notification reader</string>
+    <string name="title_activity_main">MainActivity</string>
+</resources>
