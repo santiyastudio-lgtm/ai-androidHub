@@ -6,11 +6,14 @@ import com.santiya.localaihub.data.AppSettingsDataStore
 import com.santiya.localaihub.data.VaultManager
 import com.santiya.localaihub.di.AppContainer
 import com.santiya.localaihub.plugins.CalculatorPlugin
+import com.santiya.localaihub.plugins.BrowserPlugin
 import com.santiya.localaihub.plugins.DateTimePlugin
 import com.santiya.localaihub.plugins.DevUtilsPlugin
 import com.santiya.localaihub.plugins.FileManagerPlugin
+import com.santiya.localaihub.plugins.LocationControlPlugin
 import com.santiya.localaihub.plugins.NotePadPlugin
 import com.santiya.localaihub.plugins.PluginManager
+import com.santiya.localaihub.plugins.ScriptAutomationPlugin
 import com.santiya.localaihub.plugins.SystemInfoPlugin
 import com.santiya.localaihub.plugins.WebSearchPlugin
 import com.santiya.localaihub.repo.RagRepository
@@ -44,12 +47,15 @@ class NVApplication : Application() {
 
         // Register plugins
         PluginManager.registerPlugin(WebSearchPlugin())
+        PluginManager.registerPlugin(BrowserPlugin())
         PluginManager.registerPlugin(CalculatorPlugin())
         PluginManager.registerPlugin(DateTimePlugin())
         PluginManager.registerPlugin(DevUtilsPlugin())
         PluginManager.registerPlugin(FileManagerPlugin(applicationContext))
+        PluginManager.registerPlugin(ScriptAutomationPlugin(com.santiya.localaihub.global.AppPaths.workspaceFiles(applicationContext)))
         PluginManager.registerPlugin(NotePadPlugin())
         PluginManager.registerPlugin(SystemInfoPlugin(applicationContext))
+        PluginManager.registerPlugin(LocationControlPlugin(applicationContext))
         Log.d(TAG, "Plugins registered: ${PluginManager.registeredPlugins.value.size} plugins")
 
         // Initialize TTS Manager without auto-loading (loading controlled by settings)

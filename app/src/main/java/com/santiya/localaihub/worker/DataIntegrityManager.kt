@@ -5,11 +5,18 @@ import android.util.Log
 import com.santiya.localaihub.data.AppSettingsDataStore
 import com.santiya.localaihub.data.VaultManager
 import com.santiya.localaihub.database.dao.RagDao
+import com.santiya.localaihub.di.AppContainer
 import com.santiya.localaihub.models.enums.PathType
+import com.santiya.localaihub.models.engine_schema.GgufEngineSchema
+import com.santiya.localaihub.models.table_schema.Model
+import com.santiya.localaihub.models.table_schema.ModelConfig
 import com.santiya.localaihub.repo.RagRepository
 import com.santiya.localaihub.repo.ums.UmsMemoryRepository
 import com.santiya.localaihub.repo.ums.UmsModelRepository
 import com.santiya.localaihub.repo.ums.UmsPersonaRepository
+import com.santiya.localaihub.storage.SharedModelLibrary
+import com.santiya.localaihub.global.DeviceTuner
+import com.santiya.localaihub.global.HardwareScanner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -39,6 +46,7 @@ class DataIntegrityManager(
         val danglingChatIdCleared: Boolean = false,
         val danglingPersonaIdCleared: Boolean = false,
         val danglingModelIdCleared: Boolean = false,
+        val sharedModelsRecovered: Int = 0,
         val modelsDeactivated: Int = 0,
         val orphanedRagsDeleted: Int = 0,
         val orphanedAvatarsDeleted: Int = 0,
@@ -49,6 +57,7 @@ class DataIntegrityManager(
             get() = (if (danglingChatIdCleared) 1 else 0) +
                     (if (danglingPersonaIdCleared) 1 else 0) +
                     (if (danglingModelIdCleared) 1 else 0) +
+                    sharedModelsRecovered +
                     modelsDeactivated +
                     orphanedRagsDeleted +
                     orphanedAvatarsDeleted +
@@ -78,6 +87,12 @@ class DataIntegrityManager(
             report = report.copy(danglingModelIdCleared = checkLastModelId())
         } catch (e: Exception) {
             Log.e(TAG, "Error checking last model ID", e)
+        }
+
+        try {
+            report = report.copy(sharedModelsRecovered = reconcileSharedGgufModels())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reconciling shared GGUF models", e)
         }
 
         try {
@@ -176,10 +191,7 @@ class DataIntegrityManager(
 
         for (model in models) {
             if (!model.isActive) continue
-            if (model.pathType == PathType.CONTENT_URI) continue
-
-            val file = File(model.modelPath)
-            if (!file.exists()) {
+            if (!SharedModelLibrary.exists(context, model.modelPath, model.pathType)) {
                 Log.w(TAG, "Model '${model.modelName}' file missing at ${model.modelPath}, deactivating")
                 modelRepo.updateActiveStatus(model.id, false)
                 deactivated++
@@ -207,6 +219,59 @@ class DataIntegrityManager(
         }
 
         return deleted
+    }
+
+    private suspend fun reconcileSharedGgufModels(): Int {
+        val repository = AppContainer.getModelRepository()
+        val sharedModels = SharedModelLibrary.scanManagedGgufModels(context)
+        var recovered = 0
+
+        for (shared in sharedModels) {
+            val existing = repository.getModelById(shared.model.id)
+            if (existing == null) {
+                repository.insertModel(shared.model)
+                repository.insertConfig(buildGgufConfig(shared.model))
+                recovered++
+                continue
+            }
+
+            val updated = existing.copy(
+                modelName = shared.model.modelName,
+                modelPath = shared.model.modelPath,
+                pathType = shared.model.pathType,
+                providerType = shared.model.providerType,
+                fileSize = shared.model.fileSize,
+                isActive = true
+            )
+            if (updated != existing) {
+                repository.updateModel(updated)
+                recovered++
+            }
+
+            if (repository.getConfigByModelId(shared.model.id) == null) {
+                repository.insertConfig(buildGgufConfig(shared.model))
+            }
+        }
+
+        return recovered
+    }
+
+    private suspend fun buildGgufConfig(model: Model): ModelConfig {
+        val tuningEnabled = appSettings.hardwareTuningEnabled.first()
+        val loadingParams = if (tuningEnabled) {
+            val perfMode = appSettings.performanceMode.first()
+            val modelSizeMB = ((model.fileSize ?: 0L) / (1024 * 1024)).toInt()
+            val profile = HardwareScanner.scan(context)
+            DeviceTuner.tune(profile, modelSizeMB, model.modelName, perfMode)
+        } else {
+            com.santiya.localaihub.models.engine_schema.GgufLoadingParams()
+        }
+        val schema = GgufEngineSchema(loadingParams = loadingParams)
+        return ModelConfig(
+            modelId = model.id,
+            modelLoadingParams = schema.toLoadingJson(),
+            modelInferenceParams = schema.toInferenceJson()
+        )
     }
 
     /**

@@ -1,4 +1,4 @@
-package com.santiya.localaihub.plugins
+﻿package com.santiya.localaihub.plugins
 
 import android.util.Log
 import com.santiya.localaihub.models.plugins.PluginInfo
@@ -14,7 +14,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import com.santiya.localaihub.models.data.HuggingFaceModel
 import com.santiya.localaihub.models.data.ModelType
+import com.santiya.localaihub.models.enums.ProviderType
 import java.util.concurrent.ConcurrentHashMap
+import org.json.JSONArray
 import org.json.JSONObject
 
 object PluginManager {
@@ -63,7 +65,7 @@ object PluginManager {
     private val _toolCallingConfig = MutableStateFlow(ToolCallingConfig())
     val toolCallingConfig: StateFlow<ToolCallingConfig> = _toolCallingConfig.asStateFlow()
 
-    // Grammar mode вЂ” always STRICT
+    // Grammar mode, always STRICT by default
     private val _grammarMode = MutableStateFlow(GrammarMode.STRICT)
     val grammarMode: StateFlow<GrammarMode> = _grammarMode.asStateFlow()
 
@@ -287,27 +289,63 @@ object PluginManager {
         if (toolDefinitions.isEmpty()) {
             LlmModelWorker.clearToolsGguf()
             Log.d(TAG, "Cleared all tools from LLM")
+            return
+        }
+
+        val mode = _grammarMode.value
+        val config = ToolCallingConfig(
+            grammarMode = mode,
+            useTypedGrammar = _toolCallingConfig.value.useTypedGrammar
+        )
+
+        val directSuccess = LlmModelWorker.enableToolCallingDirect(toolDefinitions, config)
+        val aidlSuccess = if (directSuccess) {
+            false
         } else {
-            val mode = _grammarMode.value
-            val config = ToolCallingConfig(
-                grammarMode = mode,
-                useTypedGrammar = _toolCallingConfig.value.useTypedGrammar
-            )
+            runCatching {
+                val toolsJson = JSONArray().apply {
+                    toolDefinitions.forEach { put(it.build().toOpenAIFormat()) }
+                }.toString()
+                LlmModelWorker.enableToolCallingGguf(
+                    toolsJson = toolsJson,
+                    grammarMode = mode.value,
+                    useTypedGrammar = config.useTypedGrammar
+                )
+            }.getOrDefault(false)
+        }
+        val success = directSuccess || aidlSuccess
 
-            // Use direct same-process path вЂ” properly enables grammar constraints
-            val success = LlmModelWorker.enableToolCallingDirect(toolDefinitions, config)
-
-            if (success) {
-                // With STRICT grammar, any model can do tool calling вЂ” mark as loaded
-                if (mode == GrammarMode.STRICT && !_isToolCallingModelLoaded.value) {
-                    _isToolCallingModelLoaded.value = true
-                    Log.d(TAG, "Tool calling force-enabled via STRICT grammar")
-                }
-                Log.d(TAG, "Synced ${toolDefinitions.size} tools with LLM " +
-                        "(grammar=${mode.name}, typed=${config.useTypedGrammar})")
-            } else {
-                Log.e(TAG, "Failed to sync tools with LLM")
+        if (success) {
+            if (mode == GrammarMode.STRICT && !_isToolCallingModelLoaded.value) {
+                _isToolCallingModelLoaded.value = true
+                Log.d(TAG, "Tool calling force-enabled via STRICT grammar")
             }
+            Log.d(
+                TAG,
+                "Synced ${toolDefinitions.size} tools with LLM " +
+                    "(grammar=${mode.name}, typed=${config.useTypedGrammar})"
+            )
+            return
+        }
+
+        val loadedGguf = LlmModelWorker.isGgufModelLoaded.value
+        val loadedProvider = when {
+            LlmModelWorker.isGoogleLocalModelLoaded.value -> ProviderType.GOOGLE_LOCAL.name
+            loadedGguf -> ProviderType.GGUF.name
+            else -> "NONE"
+        }
+        if (loadedGguf) {
+            Log.w(
+                TAG,
+                "Tool grammar sync failed for GGUF runtime; text parsing fallback remains enabled " +
+                    "(provider=$loadedProvider, grammar=${mode.name})"
+            )
+        } else {
+            Log.d(
+                TAG,
+                "Tool grammar sync deferred because no GGUF runtime is active " +
+                    "(provider=$loadedProvider, grammar=${mode.name})"
+            )
         }
     }
 
@@ -444,4 +482,5 @@ data class MultiTurnToolResult(
     val executionTimeMs: Long,
     val rawData: Any? = null
 )
+
 

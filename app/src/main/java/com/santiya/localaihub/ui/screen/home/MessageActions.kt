@@ -26,7 +26,11 @@ import com.santiya.localaihub.global.Standards
 
 /** Header part of assistant message: RAG results, tool chain, thinking block, non-text content. */
 @Composable
-internal fun AssistantMessageHeader(message: Messages, imageBlurEnabled: Boolean = true) {
+internal fun AssistantMessageHeader(
+    message: Messages,
+    imageBlurEnabled: Boolean = true,
+    showThinking: Boolean = true
+) {
     val hasRagResults = remember(message.ragResults) {
         message.ragResults?.isNotEmpty() == true
     }
@@ -68,7 +72,9 @@ internal fun AssistantMessageHeader(message: Messages, imageBlurEnabled: Boolean
                         parseThinkingTags(message.content.content)
                     } else null
                 }
-                parsed?.thinkingContent?.let { ThinkingBlock(it) }
+                if (showThinking) {
+                    parsed?.thinkingContent?.let { ThinkingBlock(it) }
+                }
             }
         }
     }
@@ -124,9 +130,7 @@ internal fun AssistantMessageFooter(
         if (isTextContent && message.content.content.isNotEmpty()) {
             // Strip thinking tags for the text content passed to action row
             val textContent = remember(message.content.content) {
-                if (THINK_TAG_REGEX.containsMatchIn(message.content.content)) {
-                    message.content.content.replace(THINK_TAG_REGEX, "").trim()
-                } else message.content.content
+                normalizeAssistantDisplayText(message.content.content)
             }
             if (textContent.isNotEmpty()) {
                 MessageActionRow(

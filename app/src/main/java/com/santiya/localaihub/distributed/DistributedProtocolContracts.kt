@@ -8,9 +8,11 @@ object DistributedProtocolIds {
     const val LIBP2P_NODE_CONTROL = "/santiya/gguf/node-control/1.0.0"
 
     const val HTTP_STATUS = "/hub/distributed/status"
+    const val HTTP_DISTRIBUTED_PLAN = "/hub/distributed/plan"
     const val HTTP_HANDSHAKE = "/hub/distributed/handshake"
     const val HTTP_PIPELINE_STEP = "/hub/distributed/pipeline-step"
     const val HTTP_HIDDEN_STATE = "/hub/distributed/hidden-state"
+    const val HTTP_EXECUTE = "/hub/lan/execute"
 }
 
 @Serializable

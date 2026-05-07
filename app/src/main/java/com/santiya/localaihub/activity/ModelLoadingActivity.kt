@@ -1,4 +1,4 @@
-package com.santiya.localaihub.activity
+﻿package com.santiya.localaihub.activity
 
 import android.content.Intent
 import android.net.Uri
@@ -74,10 +74,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.santiya.localaihub.R
 import com.santiya.localaihub.data.AppSettingsDataStore
+import com.santiya.localaihub.data.ActiveModelActivationState
+import com.santiya.localaihub.data.ActiveModelInstallStage
+import com.santiya.localaihub.data.ActiveModelState
 import com.santiya.localaihub.di.AppContainer
 import com.santiya.localaihub.global.AccelerationMode
 import com.santiya.localaihub.global.DeviceTuner
 import com.santiya.localaihub.global.HardwareScanner
+import com.santiya.localaihub.global.formatBytes
 import com.santiya.localaihub.models.engine_schema.GgufEngineSchema
 import com.santiya.localaihub.models.enums.PathType
 import com.santiya.localaihub.models.enums.ProviderType
@@ -85,14 +89,26 @@ import com.santiya.localaihub.models.table_schema.Model
 import com.santiya.localaihub.models.table_schema.ModelConfig
 import com.santiya.localaihub.ui.components.ActionButton
 import com.santiya.localaihub.ui.theme.SantiyaLocalAiHubTheme
-import com.santiya.localaihub.ui.theme.maple
 import com.santiya.localaihub.worker.DiffusionBackendSelector
 import com.santiya.localaihub.worker.DiffusionConfig
 import com.santiya.localaihub.worker.DiffusionModelInfo
+import com.santiya.localaihub.worker.ImportSourceKind
+import com.santiya.localaihub.storage.SharedModelLibrary
+import com.santiya.localaihub.storage.SharedModelManifest
 import com.santiya.localaihub.worker.ModelImportAnalyzer
+import com.santiya.localaihub.worker.ImportAnalysisResult
+import com.santiya.localaihub.worker.ImportedAssetModelInfo
 import com.santiya.localaihub.worker.ModelDataParser
 import com.santiya.localaihub.worker.ModelInfo
 import com.santiya.localaihub.worker.ModelLoadResult
+import com.santiya.localaihub.worker.ImportedModelInstaller
+import com.santiya.localaihub.worker.ContentUriIO
+import com.santiya.localaihub.worker.GgufProbeGuard
+import com.santiya.localaihub.worker.GgufProbeVerdict
+import com.santiya.localaihub.worker.GgufRuntimeSupport
+import com.santiya.localaihub.worker.GoogleLocalSupport
+import com.santiya.localaihub.worker.LlmModelWorker
+import com.santiya.localaihub.worker.StagedImportSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.firstOrNull
@@ -115,6 +131,15 @@ class ModelLoadingActivity : ComponentActivity() {
             ?.let { Uri.parse(it) }
         val pickerFilePath = intent.getStringExtra(ModelPickerActivity.EXTRA_RESULT_FILE_PATH)
         val pickerMode = intent.getStringExtra(ModelPickerActivity.EXTRA_PICKER_MODE)
+
+        (pickerUri ?: intent.data)?.let { uri ->
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+        }
 
         setContent {
             SantiyaLocalAiHubTheme {
@@ -164,9 +189,11 @@ fun ModelLoadingScreen(
     var selectedUri by remember { mutableStateOf(initialUri) }
     var selectedFilePath by remember { mutableStateOf(initialFilePath) }
     var selectedProviderType by remember { mutableStateOf(initialProviderType) }
+    var stagedImport by remember { mutableStateOf<StagedImportSource?>(null) }
     val scope = rememberCoroutineScope()
     val repository = AppContainer.getModelRepository()
     var isProcessing by remember { mutableStateOf(false) }
+    var importedModelInfo by remember { mutableStateOf<ModelInfo?>(null) }
 
     // SAF file picker launcher
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -174,10 +201,12 @@ fun ModelLoadingScreen(
     ) { uri ->
         if (uri != null) {
             // Persist permission for future access
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             selectedUri = uri
         }
     }
@@ -199,28 +228,212 @@ fun ModelLoadingScreen(
         filePickerLauncher.launch(arrayOf("application/octet-stream", "*/*"))
     }
 
+    suspend fun ensureInstalledModelReady(installedModel: Model): ModelConfig {
+        val existingModel = repository.getModelById(installedModel.id)
+        if (existingModel != null) repository.updateModel(installedModel) else repository.insertModel(installedModel)
+        currentModel = installedModel
+
+        val appSettings = AppSettingsDataStore(context)
+        val tuningEnabled = appSettings.hardwareTuningEnabled.firstOrNull() ?: true
+        val loadingParams = if (tuningEnabled) {
+            val perfMode = appSettings.performanceMode.firstOrNull() ?: com.santiya.localaihub.global.PerformanceMode.BALANCED
+            val modelSizeMB = ((installedModel.fileSize ?: 0L) / (1024 * 1024)).toInt()
+            val profile = HardwareScanner.scan(context)
+            DeviceTuner.tune(profile, modelSizeMB, installedModel.modelName, perfMode)
+        } else {
+            com.santiya.localaihub.models.engine_schema.GgufLoadingParams()
+        }
+        val isProjector = installedModel.modelName.contains("mmproj", ignoreCase = true)
+        val compatibility = GgufRuntimeSupport.inspect(File(installedModel.modelPath))
+        val warningJson = if (!compatibility.supported) {
+            """{"warning":"runtime_unsupported","gguf_architecture":"${compatibility.architecture ?: "unknown"}","message":"${(compatibility.message ?: "").replace("\"", "\\\"")}"}"""
+        } else null
+        val schema = GgufEngineSchema(loadingParams = loadingParams)
+        val config = ModelConfig(
+            modelId = installedModel.id,
+            modelLoadingParams = if (isProjector) """{"type":"projector","runtime":"vlm"}""" else schema.toLoadingJson(),
+            modelInferenceParams = when {
+                isProjector -> """{"type":"projector","runtime":"vlm"}"""
+                warningJson != null -> warningJson
+                else -> schema.toInferenceJson()
+            }
+        )
+        val existingConfig = repository.getConfigByModelId(installedModel.id)
+        if (existingConfig != null) {
+            repository.updateConfig(config.copy(id = existingConfig.id))
+        } else {
+            repository.insertConfig(config)
+        }
+        return config
+    }
+
+    val activateImportedChatModel: suspend (Model, ModelConfig) -> Boolean = { installedModel, config ->
+        if (GoogleLocalSupport.shouldPreferForGemma(context, installedModel.id, installedModel.modelName)) {
+            val descriptor = GoogleLocalSupport.buildGemmaDescriptor(installedModel.id, installedModel.modelName)
+            val activated = runCatching {
+                LlmModelWorker.loadGoogleLocalModel(context, descriptor)
+            }.getOrDefault(false)
+            if (activated) {
+                LlmModelWorker.setCurrentGoogleLocalModelId(installedModel.id)
+                LlmModelWorker.setCurrentGgufModelId(null)
+            }
+            activated
+        } else {
+            val runtimeFile = File(installedModel.modelPath)
+            val canActivate = installedModel.pathType == PathType.FILE &&
+                runtimeFile.exists() &&
+                GgufRuntimeSupport.inspect(runtimeFile).supported
+            val activated = if (canActivate) {
+                runCatching {
+                    LlmModelWorker.bindService(context)
+                    LlmModelWorker.ensureServiceReady()
+                    LlmModelWorker.loadGgufModel(installedModel, config)
+                }.getOrDefault(false)
+            } else {
+                false
+            }
+            if (activated) {
+                LlmModelWorker.setCurrentGgufModelId(installedModel.id)
+                LlmModelWorker.setCurrentGoogleLocalModelId(null)
+            }
+            activated
+        }
+    }
+
+    suspend fun promoteInstalledGgufForChat(installedModel: Model, config: ModelConfig): Boolean {
+        val appSettings = AppSettingsDataStore(context)
+        val preferred = appSettings.preferredModelsSnapshot()
+        appSettings.savePreferredModels(preferred.copy(chatModelId = installedModel.id))
+        appSettings.saveLastModelId(installedModel.id)
+
+        val activated = activateImportedChatModel(installedModel, config)
+        appSettings.saveActiveModelState(
+            ActiveModelState(
+                modelId = installedModel.id,
+                modelName = installedModel.modelName,
+                providerTypeName = if (GoogleLocalSupport.shouldPreferForGemma(context, installedModel.id, installedModel.modelName) && activated) {
+                    ProviderType.GOOGLE_LOCAL.name
+                } else {
+                    ProviderType.GGUF.name
+                },
+                installStage = if (activated) ActiveModelInstallStage.ACTIVATED else ActiveModelInstallStage.SELECTED,
+                activationState = if (activated) ActiveModelActivationState.ACTIVE else ActiveModelActivationState.IDLE,
+                activationReason = if (activated) null else "Модель импортирована и проиндексирована, но ещё не активирована."
+            )
+        )
+
+        importedModelInfo = ImportedAssetModelInfo(
+            providerType = ProviderType.GGUF,
+            architecture = "GGUF",
+            name = installedModel.modelName,
+            description = if (activated) {
+                if (GoogleLocalSupport.shouldPreferForGemma(context, installedModel.id, installedModel.modelName)) {
+                    "Модель импортирована, выбрана по умолчанию и активирована через Google Local."
+                } else {
+                    "Модель импортирована, выбрана по умолчанию и активирована для чата."
+                }
+            } else {
+                "Модель импортирована в хаб и выбрана по умолчанию. Если она ещё не активна, откройте AI-панель и нажмите загрузку."
+            },
+            parameters = buildMap {
+                put("Storage", "AI Hub")
+                put("Path", installedModel.modelPath)
+                installedModel.fileSize?.let { put("Size", formatBytes(it)) }
+            },
+            additionalInfo = buildMap {
+                put("Install state", "Installed")
+                put("Chat default", "Selected")
+                put("Runtime", if (activated) "Active" else "Imported, pending activation")
+            }
+        )
+        return activated
+    }
+
     // Process selected URI
     LaunchedEffect(selectedUri) {
         val uri = selectedUri ?: return@LaunchedEffect
 
+        importedModelInfo = null
         loadingState = LoadingState.Loading
         scope.launch(Dispatchers.IO) {
             isProcessing = true
             try {
-                // Get file info from URI
-                val modelName = modelParser.getFileNameFromUri(context, uri)
-                val fileSize = modelParser.getFileSizeFromUri(context, uri)
+                val (sourceMetadata, _) = ContentUriIO.readMetadata(context, uri)
+                val sourceDisplayName = sourceMetadata.displayName.ifBlank {
+                    modelParser.getFileNameFromUri(context, uri)
+                }
+                val sourceFileSize = sourceMetadata.fileSize
                 val importResult = importAnalyzer.analyzeUri(context, uri, selectedProviderType)
+                if (importResult.providerType == ProviderType.GGUF) {
+                    stagedImport = null
+                    val modelName = sourceDisplayName.removeSuffix(".gguf").ifBlank { sourceDisplayName }
+                    val model = Model(
+                        id = SharedModelManifest.fallbackModelIdFor(sourceDisplayName),
+                        modelPath = uri.toString(),
+                        modelName = modelName,
+                        pathType = importResult.pathType,
+                        providerType = importResult.providerType,
+                        fileSize = sourceFileSize.takeIf { it > 0L }
+                    )
+                    currentModel = model
 
-                // Fast partial hash for deduplication (first 4 MB + metadata)
-                val modelHash = modelParser.checksumSHA256FromUri(context, uri)
+                    val existingModel = repository.getModelById(model.id)
+                    installState = if (existingModel != null) {
+                        InstallState.Installed
+                    } else {
+                        InstallState.NotInstalled
+                    }
+                    val runtimeModel = if (existingModel == null) {
+                        installState = InstallState.Installing
+                        val installedResult = ImportedModelInstaller.installFromUri(
+                            context = context,
+                            sourceUri = uri,
+                            model = model,
+                            analysis = importResult,
+                        )
+                        val installedModel = installedResult.model
+                        val config = ensureInstalledModelReady(installedModel)
+                        promoteInstalledGgufForChat(installedModel, config)
+                        installState = InstallState.Installed
+                        currentModel = installedModel
+                        installedModel
+                    } else {
+                        existingModel
+                    }
+
+                    val runtimeFile = File(runtimeModel.modelPath)
+                    val compatibility = GgufRuntimeSupport.inspect(runtimeFile)
+                    if (!compatibility.supported) {
+                        loadingState = LoadingState.Error(
+                            compatibility.message
+                                ?: GgufRuntimeSupport.unsupportedArchitectureMessage(compatibility.architecture)
+                        )
+                    } else {
+                        loadingState = importedModelInfo?.let { LoadingState.Loaded(it) }
+                            ?: LoadingState.Error("GGUF импортирована, но итоговый статус активации не был сформирован.")
+                    }
+                    isProcessing = false
+                    return@launch
+                }
+                val prepared = ContentUriIO.stageToTempFile(
+                    context = context,
+                    uri = uri,
+                    preferredName = sourceDisplayName,
+                    sourceKind = ImportSourceKind.SAF_CONTENT_URI,
+                )
+                stagedImport = prepared
+                val stagedFile = prepared.stagedFile
+                val modelName = prepared.displayName
+                val fileSize = prepared.fileSize
+                val stagedImportResult = importAnalyzer.analyzePath(stagedFile, selectedProviderType)
+                val modelHash = modelParser.checksumSHA256(stagedFile.absolutePath)
 
                 val model = Model(
                     id = modelHash,
-                    modelPath = uri.toString(),  // Store the content:// URI string
+                    modelPath = stagedFile.absolutePath,
                     modelName = modelName,
-                    pathType = importResult.pathType,
-                    providerType = importResult.providerType,
+                    pathType = stagedImportResult.pathType,
+                    providerType = stagedImportResult.providerType,
                     fileSize = fileSize
                 )
                 currentModel = model
@@ -232,15 +445,71 @@ fun ModelLoadingScreen(
                 } else {
                     InstallState.NotInstalled
                 }
-
-                when (val result = modelParser.loadModelFromUri(context, uri, modelName, importResult.providerType, null)) {
-                    is ModelLoadResult.Success -> {
-                        onEngineLoaded(result.engine)
-                        loadingState = LoadingState.Loaded(result.info)
+                val runtimeModel = if (model.providerType == ProviderType.GGUF && existingModel == null) {
+                    installState = InstallState.Installing
+                    val installedResult = ImportedModelInstaller.installFromFile(
+                        context = context,
+                        sourceFile = stagedFile,
+                        model = model.copy(modelName = modelName),
+                        analysis = stagedImportResult,
+                        sourceKind = prepared.sourceKind,
+                        seedSession = prepared.session,
+                    )
+                    val installedModel = installedResult.model
+                    val config = ensureInstalledModelReady(installedModel)
+                    promoteInstalledGgufForChat(installedModel, config)
+                    installState = InstallState.Installed
+                    currentModel = installedModel
+                    installedModel
+                } else {
+                    existingModel ?: model
+                }
+                if (!stagedImportResult.runnableNow) {
+                    loadingState = LoadingState.Error(buildImportCompatibilityMessage(stagedImportResult))
+                } else {
+                    if (runtimeModel.providerType == ProviderType.GGUF) {
+                        val runtimeFile = File(runtimeModel.modelPath)
+                        val compatibility = GgufRuntimeSupport.inspect(runtimeFile)
+                        if (!compatibility.supported) {
+                            loadingState = LoadingState.Error(
+                                buildString {
+                                    append(
+                                        compatibility.message
+                                            ?: GgufRuntimeSupport.unsupportedArchitectureMessage(compatibility.architecture)
+                                    )
+                                    append("\n\nФайл прочитан и будет добавлен в хаб без потери данных, но локальный запуск на этом runtime сейчас недоступен.")
+                                }
+                            )
+                            isProcessing = false
+                            return@launch
+                        }
+                        val probeVerdict = GgufProbeGuard.evaluate(context, runtimeFile)
+                        if (!probeVerdict.canProbeNow) {
+                            loadingState = importedModelInfo?.let { LoadingState.Loaded(it) }
+                                ?: LoadingState.Error(probeVerdict.message ?: "Локальная проверка GGUF сейчас недоступна.")
+                            isProcessing = false
+                            return@launch
+                        }
+                        loadingState = importedModelInfo?.let { LoadingState.Loaded(it) }
+                            ?: LoadingState.Error("GGUF импортирована, но статус активации не был сформирован.")
+                        isProcessing = false
+                        return@launch
                     }
+                    when (val result = modelParser.loadModel(runtimeModel, null)) {
+                        is ModelLoadResult.Success -> {
+                            onEngineLoaded(result.engine)
+                            loadingState = LoadingState.Loaded(importedModelInfo ?: result.info)
+                        }
 
-                    is ModelLoadResult.Error -> {
-                        loadingState = LoadingState.Error(result.message)
+                        is ModelLoadResult.Error -> {
+                            loadingState = LoadingState.Error(
+                                buildString {
+                                    append(result.message)
+                                    stagedImportResult.reason?.let { append("\n\n").append(it) }
+                                    stagedImportResult.conversionSuggestion?.let { append("\n\n").append(it) }
+                                }
+                            )
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -255,28 +524,70 @@ fun ModelLoadingScreen(
             scope.launch {
                 installState = InstallState.Installing
                 try {
-                    // Insert model
-                    repository.insertModel(model)
+                    val analysis = when {
+                        selectedUri != null -> importAnalyzer.analyzeUri(context, selectedUri!!, model.providerType)
+                        selectedFilePath != null -> importAnalyzer.analyzePath(File(selectedFilePath!!), model.providerType)
+                        else -> error("No selected model source")
+                    }
+                    val installedResult = when {
+                        selectedUri != null && stagedImport != null -> ImportedModelInstaller.installFromFile(
+                            context = context,
+                            sourceFile = stagedImport!!.stagedFile,
+                            model = model.copy(modelName = stagedImport!!.displayName),
+                            analysis = analysis,
+                            sourceKind = stagedImport!!.sourceKind,
+                            seedSession = stagedImport!!.session,
+                        )
+                        selectedUri != null -> ImportedModelInstaller.installFromUri(context, selectedUri!!, model, analysis)
+                        selectedFilePath != null -> ImportedModelInstaller.installFromFile(context, File(selectedFilePath!!), model, analysis)
+                        else -> error("No selected model source")
+                    }
+                    val installedModel = installedResult.model
+
+                    val existingModel = repository.getModelById(installedModel.id)
+                    if (existingModel != null) repository.updateModel(installedModel) else repository.insertModel(installedModel)
+                    currentModel = installedModel
+                    android.util.Log.d(
+                        "ModelLoadingActivity",
+                        "Import session: source=${installedResult.session.sourceKind}, staging=${installedResult.session.usedStaging}, final=${installedResult.session.finalInstalledPath}, attempts=${installedResult.session.readAttempts}"
+                    )
 
                     // Create and insert config based on provider type
-                    val config = when (model.providerType) {
+                    val config = when (installedModel.providerType) {
                         ProviderType.GGUF -> {
                             // Use hardware-tuned params if enabled
                             val appSettings = AppSettingsDataStore(context)
                             val tuningEnabled = appSettings.hardwareTuningEnabled.firstOrNull() ?: true
                             val loadingParams = if (tuningEnabled) {
                                 val perfMode = appSettings.performanceMode.firstOrNull() ?: com.santiya.localaihub.global.PerformanceMode.BALANCED
-                                val modelSizeMB = ((model.fileSize ?: 0L) / (1024 * 1024)).toInt()
+                                val modelSizeMB = ((installedModel.fileSize ?: 0L) / (1024 * 1024)).toInt()
                                 val profile = HardwareScanner.scan(context)
-                                DeviceTuner.tune(profile, modelSizeMB, model.modelName, perfMode)
+                                DeviceTuner.tune(profile, modelSizeMB, installedModel.modelName, perfMode)
                             } else {
                                 com.santiya.localaihub.models.engine_schema.GgufLoadingParams()
                             }
+                            val isProjector = installedModel.modelName.contains("mmproj", ignoreCase = true)
+                            val compatibility = GgufRuntimeSupport.inspect(File(installedModel.modelPath))
+                            val warningJson = if (!compatibility.supported) {
+                                """{"warning":"runtime_unsupported","gguf_architecture":"${compatibility.architecture ?: "unknown"}","message":"${(compatibility.message ?: "").replace("\"", "\\\"")}"}"""
+                            } else null
                             val schema = GgufEngineSchema(loadingParams = loadingParams)
                             ModelConfig(
-                                modelId = model.id,
-                                modelLoadingParams = schema.toLoadingJson(),
-                                modelInferenceParams = schema.toInferenceJson()
+                                modelId = installedModel.id,
+                                modelLoadingParams = if (isProjector) """{"type":"projector","runtime":"vlm"}""" else schema.toLoadingJson(),
+                                modelInferenceParams = when {
+                                    isProjector -> """{"type":"projector","runtime":"vlm"}"""
+                                    warningJson != null -> warningJson
+                                    else -> schema.toInferenceJson()
+                                }
+                            )
+                        }
+
+                        ProviderType.GOOGLE_LOCAL -> {
+                            ModelConfig(
+                                modelId = installedModel.id,
+                                modelLoadingParams = """{"type":"google_local","runtime":"aicore"}""",
+                                modelInferenceParams = """{"type":"chat","runtime":"google_local"}"""
                             )
                         }
 
@@ -287,49 +598,100 @@ fun ModelLoadingScreen(
                             val selection = DiffusionBackendSelector.resolve(
                                 mode = accelerationMode,
                                 isQualcommDevice = com.santiya.localaihub.repo.ModelStoreRepository(context).isQualcommDevice(),
-                                modelDir = File(model.modelPath)
+                                modelDir = File(installedModel.modelPath)
                             )
                             val diffusionConfig = DiffusionConfig(
                                 runOnCpu = selection.runOnCpu,
                                 useCpuClip = selection.useCpuClip
                             )
                             ModelConfig(
-                                modelId = model.id,
+                                modelId = installedModel.id,
                                 modelLoadingParams = diffusionConfig.toJson(),
                                 modelInferenceParams = null
                             )
                         }
                         ProviderType.TTS -> {
                             ModelConfig(
-                                modelId = model.id,
+                                modelId = installedModel.id,
                                 modelLoadingParams = """{"type":"tts","useNNAPI":false}""",
                                 modelInferenceParams = """{"voice":"F1","speed":1.05,"steps":2,"language":"en"}"""
                             )
                         }
                         ProviderType.TTS_PIPER -> {
                             ModelConfig(
-                                modelId = model.id,
+                                modelId = installedModel.id,
                                 modelLoadingParams = """{"type":"tts_piper","runtime":"piper","useNNAPI":false}""",
                                 modelInferenceParams = """{"voice":"ru","speed":1.0,"steps":1,"language":"ru"}"""
                             )
                         }
                         ProviderType.ONNX -> {
                             ModelConfig(
-                                modelId = model.id,
+                                modelId = installedModel.id,
                                 modelLoadingParams = """{"type":"onnx","runtime":"vision"}""",
                                 modelInferenceParams = """{"capability":"vision"}"""
                             )
                         }
                         ProviderType.RAW_ASSET -> {
                             ModelConfig(
-                                modelId = model.id,
+                                modelId = installedModel.id,
                                 modelLoadingParams = """{"type":"raw_asset","runtime":"none"}""",
                                 modelInferenceParams = """{"warning":"high_chance_not_runnable"}"""
                             )
                         }
                     }
 
-                    repository.insertConfig(config)
+                    val existingConfig = repository.getConfigByModelId(installedModel.id)
+                    if (existingConfig != null) {
+                        repository.updateConfig(config.copy(id = existingConfig.id))
+                    } else {
+                        repository.insertConfig(config)
+                    }
+
+                    if (installedModel.providerType == ProviderType.GGUF) {
+                        val appSettings = AppSettingsDataStore(context)
+                        val preferred = appSettings.preferredModelsSnapshot()
+                        appSettings.savePreferredModels(
+                            preferred.copy(chatModelId = installedModel.id)
+                        )
+                        appSettings.saveLastModelId(installedModel.id)
+
+                        val runtimeFile = File(installedModel.modelPath)
+                        val autoLoadAllowed = installedModel.pathType == PathType.FILE &&
+                            runtimeFile.exists() &&
+                            GgufRuntimeSupport.inspect(runtimeFile).supported
+
+                        val activationMessage: Boolean = if (autoLoadAllowed) {
+                            activateImportedChatModel(installedModel, config)
+                        } else {
+                            false
+                        }
+
+                        importedModelInfo = ImportedAssetModelInfo(
+                            providerType = ProviderType.GGUF,
+                            architecture = "GGUF",
+                            name = installedModel.modelName,
+                            description = if (activationMessage) {
+                                if (GoogleLocalSupport.shouldPreferForGemma(context, installedModel.id, installedModel.modelName)) {
+                                    "Модель импортирована, выбрана по умолчанию и активирована через Google Local."
+                                } else {
+                                    "Модель импортирована, выбрана по умолчанию и активирована для чата."
+                                }
+                            } else {
+                                "Модель импортирована в хаб и выбрана по умолчанию. Если она ещё не активна, откройте AI-панель и нажмите загрузку."
+                            },
+                            parameters = buildMap {
+                                put("Storage", "AI Hub")
+                                put("Path", installedModel.modelPath)
+                                installedModel.fileSize?.let { put("Size", formatBytes(it)) }
+                            },
+                            additionalInfo = buildMap {
+                                put("Install state", "Installed")
+                                put("Chat default", "Selected")
+                                put("Runtime", if (activationMessage) "Active" else "Imported, pending activation")
+                            }
+                        )
+                        loadingState = LoadingState.Loaded(importedModelInfo!!)
+                    }
                     installState = InstallState.Installed
                 } catch (e: Exception) {
                     installState = InstallState.Error(e.message ?: "Installation failed")
@@ -344,8 +706,12 @@ fun ModelLoadingScreen(
                 installState = InstallState.Installing
                 try {
                     repository.getModelById(model.id)?.let {
+                        if (it.pathType == PathType.CONTENT_URI || SharedModelLibrary.isManagedSharedPath(it.modelPath)) {
+                            SharedModelLibrary.deleteManagedModel(context, it)
+                        }
                         repository.deleteModel(it)
                     }
+                    importedModelInfo = null
                     installState = InstallState.NotInstalled
                 } catch (e: Exception) {
                     installState = InstallState.Error(e.message ?: "Uninstall failed")
@@ -358,11 +724,13 @@ fun ModelLoadingScreen(
     LaunchedEffect(selectedFilePath) {
         val path = selectedFilePath ?: return@LaunchedEffect
 
+        importedModelInfo = null
         loadingState = LoadingState.Loading
         scope.launch(Dispatchers.IO) {
             isProcessing = true
             try {
                 val file = File(path)
+                stagedImport = null
                 val importResult = importAnalyzer.analyzePath(file, selectedProviderType)
                 val modelHash = modelParser.checksumSHA256(path)
 
@@ -382,14 +750,64 @@ fun ModelLoadingScreen(
                 } else {
                     InstallState.NotInstalled
                 }
+                val runtimeModel = if (model.providerType == ProviderType.GGUF && existingModel == null) {
+                    installState = InstallState.Installing
+                    val installedResult = ImportedModelInstaller.installFromFile(context, file, model, importResult)
+                    val installedModel = installedResult.model
+                    val config = ensureInstalledModelReady(installedModel)
+                    promoteInstalledGgufForChat(installedModel, config)
+                    installState = InstallState.Installed
+                    currentModel = installedModel
+                    installedModel
+                } else {
+                    existingModel ?: model
+                }
 
-                when (val result = modelParser.loadModel(model, null)) {
-                    is ModelLoadResult.Success -> {
-                        onEngineLoaded(result.engine)
-                        loadingState = LoadingState.Loaded(result.info)
+                if (!importResult.runnableNow) {
+                    loadingState = LoadingState.Error(buildImportCompatibilityMessage(importResult))
+                } else {
+                    if (runtimeModel.providerType == ProviderType.GGUF) {
+                        val runtimeFile = File(runtimeModel.modelPath)
+                        val compatibility = GgufRuntimeSupport.inspect(runtimeFile)
+                        if (!compatibility.supported) {
+                            loadingState = LoadingState.Error(
+                                buildString {
+                                    append(
+                                        compatibility.message
+                                            ?: GgufRuntimeSupport.unsupportedArchitectureMessage(compatibility.architecture)
+                                    )
+                                    append("\n\nФайл можно добавить в хаб, но текущий bundled runtime его не запустит.")
+                                }
+                            )
+                            isProcessing = false
+                            return@launch
+                        }
+                        val probeVerdict = GgufProbeGuard.evaluate(context, runtimeFile)
+                        if (!probeVerdict.canProbeNow) {
+                            loadingState = importedModelInfo?.let { LoadingState.Loaded(it) }
+                                ?: LoadingState.Error(probeVerdict.message ?: "Локальная проверка GGUF сейчас недоступна.")
+                            isProcessing = false
+                            return@launch
+                        }
+                        loadingState = importedModelInfo?.let { LoadingState.Loaded(it) }
+                            ?: LoadingState.Error("GGUF импортирована, но итоговый статус активации не был сформирован.")
+                        isProcessing = false
+                        return@launch
                     }
-                    is ModelLoadResult.Error -> {
-                        loadingState = LoadingState.Error(result.message)
+                    when (val result = modelParser.loadModel(runtimeModel, null)) {
+                        is ModelLoadResult.Success -> {
+                            onEngineLoaded(result.engine)
+                            loadingState = LoadingState.Loaded(importedModelInfo ?: result.info)
+                        }
+                        is ModelLoadResult.Error -> {
+                            loadingState = LoadingState.Error(
+                                buildString {
+                                    append(result.message)
+                                    importResult.reason?.let { append("\n\n").append(it) }
+                                    importResult.conversionSuggestion?.let { append("\n\n").append(it) }
+                                }
+                            )
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -445,13 +863,19 @@ fun ModelLoadingScreen(
                     is LoadingState.Idle -> EmptyState { openFilePicker() }
                     is LoadingState.Loading -> LoadingStateView()
                     is LoadingState.Loaded -> ModelInfoView(
-                        info = state.info,
+                        info = importedModelInfo ?: state.info,
                         installState = installState,
                         onChangeModel = { openFilePicker() },
                         onInstall = { installModel() },
                         onUninstall = { uninstallModel() })
 
-                    is LoadingState.Error -> ErrorStateView(state.message) { openFilePicker() }
+                    is LoadingState.Error -> ErrorStateView(
+                        message = state.message,
+                        installState = installState,
+                        canImport = currentModel != null,
+                        onRetry = { openFilePicker() },
+                        onImportAnyway = { installModel() }
+                    )
                 }
             }
 
@@ -488,7 +912,7 @@ fun ModelLoadingScreen(
                 ) {
                     LoadingIndicator()
                     Spacer(Modifier.height(8.dp))
-                    Text("Processing Model....", fontFamily = maple, fontWeight = FontWeight.Bold)
+                    Text("Processing model...", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -641,6 +1065,7 @@ private fun ModelInfoView(
                             imageVector = when (info.providerType) {
                                 ProviderType.DIFFUSION -> TnIcons.Photo
                                 ProviderType.GGUF -> TnIcons.Sparkles
+                                ProviderType.GOOGLE_LOCAL -> TnIcons.Sparkles
                                 ProviderType.TTS, ProviderType.TTS_PIPER -> TnIcons.Volume
                                 ProviderType.ONNX -> TnIcons.Eye
                                 ProviderType.RAW_ASSET -> TnIcons.FileText
@@ -676,6 +1101,7 @@ private fun ModelInfoView(
                                 Text(
                                     text = when (info.providerType) {
                                         ProviderType.GGUF -> "TEXT"
+                                        ProviderType.GOOGLE_LOCAL -> "GOOGLE"
                                         ProviderType.DIFFUSION -> "IMAGE"
                                         ProviderType.TTS, ProviderType.TTS_PIPER -> "TTS"
                                         ProviderType.ONNX -> "VISION"
@@ -1076,8 +1502,26 @@ private fun SettingRow(
     }
 }
 
+private fun buildImportCompatibilityMessage(result: ImportAnalysisResult): String {
+    return buildString {
+        append("Определённый формат: ${result.detectedFormat}.")
+        result.reason?.let { append("\n\n").append(it) }
+        result.conversionSuggestion?.let {
+            append("\n\n")
+            append("Что сделать дальше: ")
+            append(it)
+        }
+    }
+}
+
 @Composable
-private fun ErrorStateView(message: String, onRetry: () -> Unit) {
+private fun ErrorStateView(
+    message: String,
+    installState: InstallState,
+    canImport: Boolean,
+    onRetry: () -> Unit,
+    onImportAnyway: () -> Unit,
+) {
     Box(
         modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center
     ) {
@@ -1092,7 +1536,7 @@ private fun ErrorStateView(message: String, onRetry: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    "Error Loading Model",
+                    "Ошибка загрузки модели",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onErrorContainer
@@ -1104,12 +1548,31 @@ private fun ErrorStateView(message: String, onRetry: () -> Unit) {
                     textAlign = TextAlign.Center
                 )
 
-                ActionButton(
-                    onClickListener = onRetry,
-                    icon = TnIcons.Refresh,
-                    contentDescription = "Try Another Model",
-                    shape = RoundedCornerShape(12.dp)
-                )
+                if (canImport) {
+                    Text(
+                        "Файл уже прочитан и сохранён во временное хранилище. Его всё ещё можно добавить в хаб и проверить поддержку рантайма позже.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer.copy(0.72f),
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ActionButton(
+                        onClickListener = onRetry,
+                        icon = TnIcons.Refresh,
+                        contentDescription = "Выбрать другую модель",
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    if (canImport && installState != InstallState.Installing) {
+                        ActionButton(
+                            onClickListener = onImportAnyway,
+                            icon = if (installState == InstallState.Installed) TnIcons.CircleCheck else TnIcons.Download,
+                            contentDescription = if (installState == InstallState.Installed) "Installed" else "Import Anyway",
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    }
+                }
             }
         }
     }
@@ -1181,3 +1644,4 @@ sealed class InstallState {
     data object Installed : InstallState()
     data class Error(val message: String) : InstallState()
 }
+

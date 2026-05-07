@@ -89,11 +89,7 @@ internal fun AssistantStreamingBubble(text: String, thinkingEnabled: Boolean = f
     val displayed = if (revealedLen < text.length) text.substring(0, revealedLen) else text
 
     // Only parse thinking tags when thinking mode is enabled вЂ” skip regex overhead otherwise
-    val parsedMessage = if (thinkingEnabled) {
-        remember(displayed) { parseThinkingTags(displayed) }
-    } else {
-        ParsedMessage(thinkingContent = null, actualContent = displayed)
-    }
+    val parsedMessage = remember(displayed) { parseThinkingTags(displayed) }
 
     Column(
         modifier = Modifier
@@ -101,7 +97,7 @@ internal fun AssistantStreamingBubble(text: String, thinkingEnabled: Boolean = f
             .padding(vertical = Standards.SpacingSm),
         verticalArrangement = Arrangement.spacedBy(Standards.SpacingSm)
     ) {
-        if (parsedMessage.thinkingContent != null) {
+        if (thinkingEnabled && parsedMessage.thinkingContent != null) {
             ThinkingBlock(
                 thinkingText = parsedMessage.thinkingContent,
                 isStreaming = parsedMessage.isThinkingInProgress

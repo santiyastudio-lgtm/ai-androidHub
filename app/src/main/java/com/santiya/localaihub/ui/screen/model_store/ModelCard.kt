@@ -35,12 +35,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.santiya.localaihub.global.Standards
+import com.santiya.localaihub.global.formatBytes
 import com.santiya.localaihub.hub.Downloadability
 import com.santiya.localaihub.hub.ModelCatalogPresentation
 import com.santiya.localaihub.hub.ModelSupportStatus
@@ -55,10 +57,10 @@ import com.santiya.localaihub.ui.theme.Motion
 @Composable
 private fun SupportBadge(status: ModelSupportStatus) {
     val (label, color) = when (status) {
-        ModelSupportStatus.LOCAL -> "Р›РѕРєР°Р»СЊРЅРѕ" to MaterialTheme.colorScheme.primary
-        ModelSupportStatus.LAN -> "Р§РµСЂРµР· LAN" to MaterialTheme.colorScheme.secondary
-        ModelSupportStatus.EXPERIMENTAL -> "Р­РєСЃРїРµСЂРёРјРµРЅС‚Р°Р»СЊРЅРѕ" to MaterialTheme.colorScheme.tertiary
-        ModelSupportStatus.CATALOG_ONLY -> "РўРѕР»СЊРєРѕ РєР°С‚Р°Р»РѕРі" to MaterialTheme.colorScheme.onSurfaceVariant
+        ModelSupportStatus.LOCAL -> "Локально" to MaterialTheme.colorScheme.primary
+        ModelSupportStatus.LAN -> "Через LAN" to MaterialTheme.colorScheme.secondary
+        ModelSupportStatus.EXPERIMENTAL -> "Экспериментально" to MaterialTheme.colorScheme.tertiary
+        ModelSupportStatus.CATALOG_ONLY -> "Только каталог" to MaterialTheme.colorScheme.onSurfaceVariant
     }
     StoreInfoChip(text = label, accent = color)
 }
@@ -96,9 +98,7 @@ fun ModelCard(
             .clickable { expanded = !expanded },
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         shape = RoundedCornerShape(30.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        )
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(
             modifier = Modifier.padding(Standards.CardPadding),
@@ -144,10 +144,17 @@ fun ModelCard(
                 StoreInfoChip(presentation.sourceLabel, MaterialTheme.colorScheme.secondary)
                 SupportBadge(presentation.supportStatus)
                 when (presentation.downloadability) {
-                    Downloadability.LOCAL_RUNNABLE -> StoreInfoChip("РњРѕР¶РЅРѕ СЃРєР°С‡Р°С‚СЊ", MaterialTheme.colorScheme.primary)
-                    Downloadability.RAW_ASSET_DOWNLOAD -> StoreInfoChip("РЎРєР°С‡РёРІР°РµС‚СЃСЏ РєР°Рє asset", MaterialTheme.colorScheme.tertiary)
-                    Downloadability.TOKEN_REQUIRED -> StoreInfoChip("РќСѓР¶РµРЅ С‚РѕРєРµРЅ", MaterialTheme.colorScheme.error)
-                    Downloadability.UNRESOLVED -> StoreInfoChip("РџРѕРєР° Р±РµР· СЃСЃС‹Р»РєРё", MaterialTheme.colorScheme.onSurfaceVariant)
+                    Downloadability.LOCAL_RUNNABLE ->
+                        StoreInfoChip("Можно скачать", MaterialTheme.colorScheme.primary)
+
+                    Downloadability.RAW_ASSET_DOWNLOAD ->
+                        StoreInfoChip("Скачать как asset", MaterialTheme.colorScheme.tertiary)
+
+                    Downloadability.TOKEN_REQUIRED ->
+                        StoreInfoChip("Нужен токен", MaterialTheme.colorScheme.error)
+
+                    Downloadability.UNRESOLVED ->
+                        StoreInfoChip("Ссылка не найдена", MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -170,7 +177,7 @@ fun ModelCard(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = if (expanded) presentation.descriptionRu else presentation.descriptionRu,
+                        text = presentation.descriptionRu,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = if (expanded) 8 else 3,
@@ -182,7 +189,7 @@ fun ModelCard(
                     isInstalled -> {
                         Icon(
                             imageVector = TnIcons.CircleCheck,
-                            contentDescription = "РЈСЃС‚Р°РЅРѕРІР»РµРЅРѕ",
+                            contentDescription = "Установлено",
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(24.dp)
                         )
@@ -192,29 +199,29 @@ fun ModelCard(
                         ActionProgressButton(
                             onClickListener = onCancelDownload,
                             icon = TnIcons.PlayerStop,
-                            contentDescription = "РћС‚РјРµРЅРёС‚СЊ"
+                            contentDescription = "Отменить"
+                        )
+                    }
+
+                    canStartDownload -> {
+                        ActionButton(
+                            onClickListener = onDownload,
+                            icon = TnIcons.Download,
+                            contentDescription = "Скачать модель"
                         )
                     }
 
                     else -> {
-                        if (canStartDownload) {
-                            ActionButton(
-                                onClickListener = onDownload,
-                                icon = TnIcons.Download,
-                                contentDescription = "Скачать модель"
-                            )
-                        } else {
-                            Icon(
-                                imageVector = if (presentation.downloadability == Downloadability.TOKEN_REQUIRED) {
-                                    TnIcons.AlertTriangle
-                                } else {
-                                    TnIcons.Clock
-                                },
-                                contentDescription = "Скачивание недоступно",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
+                        Icon(
+                            imageVector = if (presentation.downloadability == Downloadability.TOKEN_REQUIRED) {
+                                TnIcons.AlertTriangle
+                            } else {
+                                TnIcons.Download
+                            },
+                            contentDescription = "Скачивание недоступно",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 }
             }
@@ -265,15 +272,15 @@ fun ModelCard(
                 exit = Motion.Exit
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(Standards.SpacingSm)) {
-                    ModelDetailRow("Р¤Р°Р№Р»", model.resolvedFileName ?: "Р‘СѓРґРµС‚ РІС‹Р±СЂР°РЅ РїСЂРё Р·Р°РіСЂСѓР·РєРµ")
-                    ModelDetailRow("РСЃС‚РѕС‡РЅРёРє", model.pageUrl ?: presentation.sourceLabel)
+                    ModelDetailRow("Файл", model.resolvedFileName ?: "Будет выбран при загрузке")
+                    ModelDetailRow("Источник", model.pageUrl ?: presentation.sourceLabel)
                     ModelDetailRow(
-                        "Р—Р°РїСѓСЃРє",
+                        "Запуск",
                         when (presentation.supportStatus) {
-                            ModelSupportStatus.LOCAL -> "Р›РѕРєР°Р»СЊРЅРѕ РЅР° СѓСЃС‚СЂРѕР№СЃС‚РІРµ"
-                            ModelSupportStatus.LAN -> "Р§РµСЂРµР· LAN-СѓР·РµР»"
-                            ModelSupportStatus.EXPERIMENTAL -> "Р›СѓС‡С€Рµ С‡РµСЂРµР· СѓР·РµР» РёР»Рё СЃ Р·Р°РїР°СЃРѕРј RAM"
-                            ModelSupportStatus.CATALOG_ONLY -> "РўРѕР»СЊРєРѕ РєР°С‚Р°Р»РѕРі РёР»Рё raw asset"
+                            ModelSupportStatus.LOCAL -> "Локально на устройстве"
+                            ModelSupportStatus.LAN -> "Через LAN-узел"
+                            ModelSupportStatus.EXPERIMENTAL -> "Экспериментальный запуск или raw asset"
+                            ModelSupportStatus.CATALOG_ONLY -> "Только каталог или asset"
                         }
                     )
                 }
@@ -292,21 +299,21 @@ fun ModelCard(
                     }
 
                     val statusText = when {
-                        isProcessing -> "РџРѕРґРіРѕС‚РѕРІРєР° РјРѕРґРµР»Рё..."
+                        isProcessing -> "Подготовка модели..."
                         isExtracting -> {
                             val state = downloadState as ModelDownloadService.DownloadState.Extracting
                             if (state.currentFile.isNotEmpty()) {
-                                "Р Р°СЃРїР°РєРѕРІРєР° ${state.currentFile} (${state.extractedCount + 1}/${state.totalFiles})"
+                                "Распаковка ${state.currentFile} (${state.extractedCount + 1}/${state.totalFiles})"
                             } else {
-                                "Р Р°СЃРїР°РєРѕРІРєР°..."
+                                "Распаковка..."
                             }
                         }
+
                         isDownloading -> {
                             val state = downloadState as ModelDownloadService.DownloadState.Downloading
-                            val downloadedMB = state.downloadedBytes / 1_000_000
-                            val totalMB = state.totalBytes / 1_000_000
-                            "${downloadedMB}/${totalMB} MB (${(progress * 100).toInt()}%)"
+                            "${formatBytes(state.downloadedBytes)} / ${formatBytes(state.totalBytes)} (${(progress * 100).toInt()}%)"
                         }
+
                         else -> ""
                     }
 
@@ -315,6 +322,22 @@ fun ModelCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
+
+                    if (downloadState is ModelDownloadService.DownloadState.Downloading) {
+                        val speedText = buildString {
+                            append(formatDownloadSpeed(downloadState.speedBytesPerSec))
+                            val etaText = formatEta(downloadState.etaSeconds)
+                            if (etaText != null) {
+                                append(" • ")
+                                append(etaText)
+                            }
+                        }
+                        Text(
+                            text = speedText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(Standards.SpacingXs))
 
@@ -329,6 +352,7 @@ fun ModelCard(
                                         0f
                                     }
                                 }
+
                                 else -> 0f
                             }
                         },
@@ -381,7 +405,7 @@ private fun ModelDetailRow(
 @Composable
 private fun StoreInfoChip(
     text: String,
-    accent: androidx.compose.ui.graphics.Color
+    accent: Color
 ) {
     Text(
         text = text,
@@ -396,4 +420,20 @@ private fun StoreInfoChip(
             .padding(horizontal = 10.dp, vertical = 6.dp)
             .basicMarquee()
     )
+}
+
+private fun formatDownloadSpeed(speedBytesPerSec: Long): String {
+    if (speedBytesPerSec <= 0L) return "Скорость считается..."
+    return "${formatBytes(speedBytesPerSec)}/s"
+}
+
+private fun formatEta(etaSeconds: Long): String? {
+    if (etaSeconds < 0L) return null
+    val minutes = etaSeconds / 60
+    val seconds = etaSeconds % 60
+    return if (minutes > 0) {
+        "Осталось ${minutes}м ${seconds}с"
+    } else {
+        "Осталось ${seconds}с"
+    }
 }

@@ -51,6 +51,7 @@ class AppSettingsDataStore(private val context: Context) {
         private val ASK_MODEL_RELOAD_DIALOG = booleanPreferencesKey("ask_model_reload_dialog")
         private val THEME_PRESET = stringPreferencesKey("theme_preset")
         private val PREFERRED_MODELS_JSON = stringPreferencesKey("preferred_models_json")
+        private val ACTIVE_MODEL_STATE_JSON = stringPreferencesKey("active_model_state_json")
         private val EXTERNAL_ACCESS_POLICY_JSON = stringPreferencesKey("external_access_policy_json")
         private val ORCHESTRA_CONFIG_JSON = stringPreferencesKey("orchestra_config_json")
         private val LAN_HUB_CONFIG_JSON = stringPreferencesKey("lan_hub_config_json")
@@ -221,8 +222,8 @@ class AppSettingsDataStore(private val context: Context) {
     }
 
     val themePreset: Flow<ThemePreset> = context.appSettingsDataStore.data.map { prefs ->
-        val name = prefs[THEME_PRESET] ?: ThemePreset.SYSTEM.name
-        runCatching { ThemePreset.valueOf(name) }.getOrDefault(ThemePreset.SYSTEM)
+        val name = prefs[THEME_PRESET] ?: ThemePreset.OBSIDIAN_MONO.name
+        runCatching { ThemePreset.valueOf(name) }.getOrDefault(ThemePreset.OBSIDIAN_MONO)
     }
 
     suspend fun saveThemePreset(themePreset: ThemePreset) {
@@ -240,6 +241,18 @@ class AppSettingsDataStore(private val context: Context) {
     }
 
     suspend fun preferredModelsSnapshot(): PreferredModelMap = preferredModels.first()
+
+    val activeModelState: Flow<ActiveModelState> = context.appSettingsDataStore.data.map { prefs ->
+        decodeJsonOrDefault(prefs[ACTIVE_MODEL_STATE_JSON], ActiveModelState())
+    }
+
+    suspend fun saveActiveModelState(state: ActiveModelState) {
+        context.appSettingsDataStore.edit {
+            it[ACTIVE_MODEL_STATE_JSON] = json.encodeToString(state)
+        }
+    }
+
+    suspend fun activeModelStateSnapshot(): ActiveModelState = activeModelState.first()
 
     val externalAccessPolicy: Flow<ExternalAccessPolicy> = context.appSettingsDataStore.data.map { prefs ->
         decodeJsonOrDefault(prefs[EXTERNAL_ACCESS_POLICY_JSON], ExternalAccessPolicy())

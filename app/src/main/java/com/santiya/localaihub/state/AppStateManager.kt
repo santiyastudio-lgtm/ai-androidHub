@@ -48,6 +48,7 @@ object AppStateManager {
             loadingStartTime = System.currentTimeMillis()
         }
         currentModelName = modelName
+        Log.i(TAG, "setLoadingModel: model=$modelName progress=$progress")
         setStateIfChanged(AppState.LoadingModel(modelName, progress))
     }
 
@@ -57,7 +58,7 @@ object AppStateManager {
     fun setModelLoaded(modelName: String) {
         currentModelName = modelName
         val loadingTime = System.currentTimeMillis() - loadingStartTime
-        Log.d(TAG, "Model loaded in ${loadingTime}ms")
+        Log.i(TAG, "setModelLoaded: model=$modelName in ${loadingTime}ms")
         updateIdleState()
     }
 
@@ -66,6 +67,7 @@ object AppStateManager {
      */
     fun setModelUnloaded() {
         currentModelName = null
+        Log.i(TAG, "setModelUnloaded")
         updateIdleState()
     }
 
@@ -132,6 +134,7 @@ object AppStateManager {
      * Update when an error occurs
      */
     fun setError(message: String) {
+        Log.e(TAG, "setError: $message")
         setStateIfChanged(AppState.Error(message, currentModelName))
     }
 

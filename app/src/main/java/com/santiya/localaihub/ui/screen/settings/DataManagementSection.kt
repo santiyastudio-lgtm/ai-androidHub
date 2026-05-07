@@ -2,6 +2,7 @@ package com.santiya.localaihub.ui.screen.settings
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -36,17 +37,63 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.santiya.localaihub.global.Standards
 import com.santiya.localaihub.global.formatBackupTimestamp
 import com.santiya.localaihub.global.formatBytes
+import com.santiya.localaihub.global.localizedText
+import com.santiya.localaihub.support.SupportReportBundle
 import com.santiya.localaihub.ui.components.PasswordTextField
 import com.santiya.localaihub.ui.components.SwitchRow
 import com.santiya.localaihub.ui.icons.TnIcons
+import com.santiya.localaihub.viewmodel.SupportReportState
 import com.santiya.localaihub.viewmodel.SettingsViewModel
 import com.santiya.localaihub.worker.SystemBackupManager
+import java.io.File
 
 // в”Ђв”Ђ Data Management Section в”Ђв”Ђ
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun SupportQuickSection() {
+    val context = LocalContext.current
+    Surface(
+        onClick = { openSupportBot(context, "support") },
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(Standards.CardCornerRadius),
+        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.10f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f))
+    ) {
+        Row(
+            modifier = Modifier.padding(Standards.CardPadding),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Standards.SpacingSm)
+        ) {
+            Icon(
+                TnIcons.Sparkles, null,
+                modifier = Modifier.size(Standards.IconLg),
+                tint = MaterialTheme.colorScheme.tertiary
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    localizedText("Поддержать проект", "Support the project"),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+                Text(
+                    localizedText(
+                        "Открывает @SantiyaSupportBot для доната и реквизитов поддержки.",
+                        "Opens @SantiyaSupportBot for donations and support details."
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -55,14 +102,17 @@ internal fun DataManagementSection(viewModel: SettingsViewModel) {
     val backupProgress by viewModel.backupProgress.collectAsStateWithLifecycle()
     val backupOptions by viewModel.backupOptions.collectAsStateWithLifecycle()
     val backupSizeEstimate by viewModel.backupSizeEstimate.collectAsStateWithLifecycle()
+    val supportReportState by viewModel.supportReportState.collectAsStateWithLifecycle()
 
     var showBackupDialog by remember { mutableStateOf(false) }
     var showRestoreDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showSupportDialog by remember { mutableStateOf(false) }
     var backupPassword by remember { mutableStateOf("") }
     var backupPasswordConfirm by remember { mutableStateOf("") }
     var restorePassword by remember { mutableStateOf("") }
     var deleteConfirmText by remember { mutableStateOf("") }
+    var supportComment by remember { mutableStateOf("") }
 
     // SAF launchers
     val backupLauncher = rememberLauncherForActivityResult(
@@ -103,6 +153,15 @@ internal fun DataManagementSection(viewModel: SettingsViewModel) {
                 kotlinx.coroutines.delay(2000)
                 viewModel.clearBackupProgress()
             }
+        }
+    }
+
+    LaunchedEffect(supportReportState) {
+        val state = supportReportState
+        if (state is SupportReportState.Ready) {
+            launchTelegramSupport(context, state.bundle)
+            kotlinx.coroutines.delay(400)
+            viewModel.clearSupportReportState()
         }
     }
 
@@ -174,6 +233,47 @@ internal fun DataManagementSection(viewModel: SettingsViewModel) {
             }
         }
 
+        when (val state = supportReportState) {
+            SupportReportState.Idle,
+            is SupportReportState.Ready -> Unit
+
+            SupportReportState.Preparing -> {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f),
+                    shape = RoundedCornerShape(Standards.CardCornerRadius)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(Standards.CardPadding),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Standards.SpacingSm)
+                    ) {
+                        LoadingIndicator(modifier = Modifier.size(20.dp))
+                        Text(
+                            text = localizedText("Подготавливаю архив логов для поддержки...", "Preparing support archive..."),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+
+            is SupportReportState.Error -> {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f),
+                    shape = RoundedCornerShape(Standards.CardCornerRadius)
+                ) {
+                    Text(
+                        state.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(Standards.CardPadding)
+                    )
+                }
+            }
+        }
+
         // --- Green Backup Card ---
         Surface(
             onClick = { showBackupDialog = true },
@@ -234,6 +334,78 @@ internal fun DataManagementSection(viewModel: SettingsViewModel) {
                     )
                     Text(
                         "Restore from encrypted backup file",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        Surface(
+            onClick = { showSupportDialog = true },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(Standards.CardCornerRadius),
+            color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f))
+        ) {
+            Row(
+                modifier = Modifier.padding(Standards.CardPadding),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Standards.SpacingSm)
+            ) {
+                Icon(
+                    TnIcons.Send, null,
+                    modifier = Modifier.size(Standards.IconLg),
+                    tint = MaterialTheme.colorScheme.secondary
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        localizedText("Отправить логи в поддержку", "Send logs to support"),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                    Text(
+                        localizedText(
+                            "Подготовит архив, откроет @SantiyaSupportBot и даст отправить логи с комментарием.",
+                            "Prepares an archive, opens @SantiyaSupportBot, and lets you send logs with a comment."
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        Surface(
+            onClick = { openSupportBot(context, "donate") },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(Standards.CardCornerRadius),
+            color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.10f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f))
+        ) {
+            Row(
+                modifier = Modifier.padding(Standards.CardPadding),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Standards.SpacingSm)
+            ) {
+                Icon(
+                    TnIcons.Sparkles, null,
+                    modifier = Modifier.size(Standards.IconLg),
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        localizedText("Поддержать проект", "Support the project"),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                    Text(
+                        localizedText(
+                            "Открывает @SantiyaSupportBot для доната и реквизитов поддержки.",
+                            "Opens @SantiyaSupportBot for donations and support details."
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -327,6 +499,23 @@ internal fun DataManagementSection(viewModel: SettingsViewModel) {
             onDismiss = {
                 showDeleteDialog = false
                 deleteConfirmText = ""
+            }
+        )
+    }
+
+    if (showSupportDialog) {
+        SupportLogsDialog(
+            comment = supportComment,
+            onCommentChange = { supportComment = it },
+            isBusy = supportReportState is SupportReportState.Preparing,
+            onConfirm = {
+                showSupportDialog = false
+                viewModel.prepareSupportReport(supportComment)
+                supportComment = ""
+            },
+            onDismiss = {
+                showSupportDialog = false
+                supportComment = ""
             }
         )
     }
@@ -555,4 +744,113 @@ private fun DeleteAllDataDialog(
         },
         shape = RoundedCornerShape(Standards.RadiusXl)
     )
+}
+
+@Composable
+private fun SupportLogsDialog(
+    comment: String,
+    onCommentChange: (String) -> Unit,
+    isBusy: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(TnIcons.Send, null, tint = MaterialTheme.colorScheme.secondary) },
+        title = {
+            Text(localizedText("Отправить логи в поддержку", "Send logs to support"), fontWeight = FontWeight.SemiBold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Standards.SpacingSm)) {
+                Text(
+                    localizedText(
+                        "Приложение соберёт диагностический архив, откроет Telegram-бота и подготовит файл к отправке.",
+                        "The app will build a diagnostics archive, open the Telegram bot, and prepare the file for sending."
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = comment,
+                    onValueChange = onCommentChange,
+                    label = { Text(localizedText("Комментарий для поддержки", "Comment for support")) },
+                    placeholder = { Text(localizedText("Опишите проблему или шаги, как её повторить", "Describe the issue or reproduction steps")) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    maxLines = 6
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm, enabled = !isBusy) {
+                Text(localizedText("Открыть Telegram", "Open Telegram"))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !isBusy) {
+                Text(localizedText("Отмена", "Cancel"))
+            }
+        },
+        shape = RoundedCornerShape(Standards.RadiusXl)
+    )
+}
+
+private fun openSupportBot(
+    context: android.content.Context,
+    startPayload: String? = null,
+) {
+    val packageManager = context.packageManager
+    val botPath = startPayload?.takeIf { it.isNotBlank() }?.let { "?start=$it" }.orEmpty()
+    val botIntent = Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve?domain=SantiyaSupportBot$botPath")).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    val webFallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/SantiyaSupportBot$botPath")).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    if (botIntent.resolveActivity(packageManager) != null) {
+        context.startActivity(botIntent)
+    } else if (webFallbackIntent.resolveActivity(packageManager) != null) {
+        context.startActivity(webFallbackIntent)
+    }
+}
+
+private suspend fun launchTelegramSupport(
+    context: android.content.Context,
+    bundle: SupportReportBundle
+) {
+    val reportFile = File(bundle.archiveFile.absolutePath)
+    if (!reportFile.exists()) return
+
+    val packageManager = context.packageManager
+    val archiveUri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        reportFile
+    )
+
+    openSupportBot(context, bundle.telegramStartPayload)
+    kotlinx.coroutines.delay(350)
+
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "application/zip"
+        putExtra(Intent.EXTRA_STREAM, archiveUri)
+        putExtra(Intent.EXTRA_TEXT, bundle.shareText)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    val launchShareIntent = if (packageManager.getLaunchIntentForPackage("org.telegram.messenger") != null) {
+        shareIntent.setPackage("org.telegram.messenger").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    } else {
+        Intent.createChooser(
+            shareIntent,
+            localizedText(context, "Отправить архив логов", "Send support archive")
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+
+    if (launchShareIntent.resolveActivity(packageManager) != null) {
+        context.startActivity(launchShareIntent)
+    }
 }

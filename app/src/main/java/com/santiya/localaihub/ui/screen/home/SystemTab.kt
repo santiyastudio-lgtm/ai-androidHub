@@ -46,7 +46,9 @@ internal fun SystemTabContent(
     chatViewModel: ChatViewModel
 ) {
     val context = LocalContext.current
-    val isTextModelLoaded by modelViewModel.isGgufModelLoaded.collectAsStateWithLifecycle()
+    val isGgufModelLoaded by modelViewModel.isGgufModelLoaded.collectAsStateWithLifecycle()
+    val isGoogleLocalModelLoaded by modelViewModel.isGoogleLocalModelLoaded.collectAsStateWithLifecycle()
+    val isTextModelLoaded = isGgufModelLoaded || isGoogleLocalModelLoaded
     val isImageModelLoaded by modelViewModel.isDiffusionModelLoaded.collectAsStateWithLifecycle()
     val chatState by chatViewModel.chatUiState.collectAsStateWithLifecycle()
 

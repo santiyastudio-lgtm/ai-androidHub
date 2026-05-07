@@ -26,9 +26,17 @@ data class ChatUiState(
     val currentChatId: String? = null,
     val error: String? = null,
     val generationType: ModelType = ModelType.TEXT_GENERATION,
+    val openClawEnabled: Boolean = false,
     val thinkingEnabled: Boolean = false,
-    val modelSupportsThinking: Boolean = false
+    val modelSupportsThinking: Boolean = false,
+    val openClawMode: OpenClawMode = OpenClawMode.NORMAL
 )
+
+enum class OpenClawMode {
+    NORMAL,
+    THINKING,
+    ORCHESTRA
+}
 
 data class AgentState(
     val phase: AgentPhase = AgentPhase.Idle,

@@ -105,4 +105,8 @@ object AppContainer {
         return VaultManager.memoryRepo ?: error("VaultManager not initialized вЂ” cannot access MemoryRepository")
     }
 
+    fun getAppContext(): Context {
+        check(::appContext.isInitialized) { "AppContainer not initialized." }
+        return appContext
+    }
 }

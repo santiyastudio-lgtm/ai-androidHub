@@ -115,8 +115,7 @@ fun LiveAiScreen(
     val lastAnalysisTs: MutableLongState = remember { mutableLongStateOf(0L) }
 
     val installedModels by llmModelViewModel.installedModels.collectAsStateWithLifecycle(emptyList())
-    val currentModelId by llmModelViewModel.currentModelID.collectAsStateWithLifecycle()
-    val currentModelName = installedModels.firstOrNull { it.id == currentModelId }?.modelName ?: "Модель не выбрана"
+    val currentModelName = llmModelViewModel.currentModelName.collectAsStateWithLifecycle().value ?: "Модель не выбрана"
     val isVlmLoaded by chatViewModel.isVlmLoaded.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
@@ -318,7 +317,7 @@ fun LiveAiScreen(
                                     LiveMode.FACES -> status = if (faceBoxes.isEmpty()) "Лица не найдены." else "Найдено лиц: ${faceBoxes.size}"
                                     LiveMode.FACE_MATCH -> status = "Для live-распознавания нужен внешний watchlist через Hub API. Локальная детекция работает."
                                     else -> {
-                                        if (!isVlmLoaded || currentModelId.isNullOrBlank()) {
+                                        if (!isVlmLoaded || currentModelName == "Модель не выбрана") {
                                             status = "Сначала загрузите text model и mmproj projector."
                                             return@ActionButton
                                         }

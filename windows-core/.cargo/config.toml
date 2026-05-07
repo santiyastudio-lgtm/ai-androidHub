@@ -1,0 +1,8 @@
+[target.x86_64-pc-windows-msvc]
+linker = "C:\\Users\\kotpe\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\lib\\rustlib\\x86_64-pc-windows-msvc\\bin\\rust-lld.exe"
+rustflags = [
+  "-Clinker-flavor=lld-link",
+  "-Lnative=toolchain-shim",
+  "-Lnative=C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\um\\x64",
+  "-Lnative=C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.22621.0\\ucrt\\x64"
+]

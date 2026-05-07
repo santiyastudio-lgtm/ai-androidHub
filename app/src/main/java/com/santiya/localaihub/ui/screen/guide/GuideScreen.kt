@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.santiya.localaihub.global.Standards
+import com.santiya.localaihub.global.localizedText
 import com.santiya.localaihub.ui.icons.TnIcons
 
 @Composable
@@ -45,7 +46,10 @@ fun GuideScreen(
         Spacer(Modifier.height(Standards.SpacingXl))
 
         Text(
-            text = "Добро пожаловать в SantiyaLocalAiHub",
+            text = localizedText(
+                "Добро пожаловать в SantiyaLocalAiHub",
+                "Welcome to SantiyaLocalAiHub"
+            ),
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
@@ -55,7 +59,10 @@ fun GuideScreen(
         Spacer(Modifier.height(Standards.SpacingMd))
 
         Text(
-            text = "Локальный AI hub без облака и телеметрии.\nОтветы и действия моделей остаются на вашем устройстве.",
+            text = localizedText(
+                "OpenClaw Local — основной режим хаба. Он работает на локальной модели внутри приложения, без мессенджеров и внешних чатов.",
+                "OpenClaw Local is the primary hub mode. It runs on a local model inside the app, with no messengers or external chats."
+            ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -67,7 +74,7 @@ fun GuideScreen(
             onClick = onContinue,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Продолжить")
+            Text(localizedText("Продолжить", "Continue"))
         }
     }
 }

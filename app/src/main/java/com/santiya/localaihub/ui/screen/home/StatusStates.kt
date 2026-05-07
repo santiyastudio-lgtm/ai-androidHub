@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.santiya.localaihub.global.localizedText
 import com.santiya.localaihub.models.state.AppState
 import com.santiya.localaihub.viewmodel.ChatViewModel
 import com.santiya.localaihub.viewmodel.StreamingState
@@ -70,13 +71,13 @@ internal fun WelcomeContent() {
         )
         Column {
             Text(
-                text = "Welcome",
+                text = localizedText("Готово к старту", "Welcome"),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Load a model to begin",
+                text = localizedText("Загрузите модель, чтобы начать", "Load a model to begin"),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -105,13 +106,13 @@ internal fun NoModelLoadedContent() {
         )
         Column {
             Text(
-                text = "No Model Loaded",
+                text = localizedText("Модель не загружена", "No Model Loaded"),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Switch to Models tab to load one",
+                text = localizedText("Откройте вкладку моделей и загрузите одну", "Switch to Models tab to load one"),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

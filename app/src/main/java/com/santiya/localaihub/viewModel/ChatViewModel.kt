@@ -1,4 +1,4 @@
-package com.santiya.localaihub.viewmodel
+﻿package com.santiya.localaihub.viewmodel
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -9,10 +9,14 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.santiya.localaihub.data.AppSettingsDataStore
+import com.santiya.localaihub.data.ActiveModelActivationState
 import com.santiya.localaihub.di.AppContainer
 import com.santiya.localaihub.engine.GenerationEvent
+import com.santiya.localaihub.browser.BrowserSessionSnapshot
+import com.santiya.localaihub.browser.BrowserToolState
 import com.santiya.localaihub.models.engine_schema.GgufEngineSchema
 import com.santiya.localaihub.models.engine_schema.GgufInferenceParams
+import com.santiya.localaihub.models.enums.ProviderType
 import com.santiya.localaihub.models.messages.ContentType
 import com.santiya.localaihub.models.messages.ImageGenerationMetrics
 import com.santiya.localaihub.models.messages.MessageContent
@@ -25,6 +29,7 @@ import com.santiya.localaihub.models.plugins.PluginResultData
 import com.santiya.localaihub.plugins.PluginManager
 import com.santiya.localaihub.state.AppStateManager
 import com.santiya.localaihub.worker.ChatManager
+import com.santiya.localaihub.worker.GoogleLocalSupport
 import com.santiya.localaihub.worker.DiffusionConfig
 import com.santiya.localaihub.worker.DiffusionInferenceParams
 import com.santiya.localaihub.models.ModelType
@@ -32,6 +37,12 @@ import com.santiya.localaihub.tts.TTSManager
 import com.santiya.localaihub.tts.TTSSettings
 import com.santiya.localaihub.worker.LlmModelWorker
 import com.santiya.localaihub.models.engine_schema.DecodingMetrics
+import com.santiya.localaihub.offlinecity.OfflineCityAnswer
+import com.santiya.localaihub.offlinecity.OfflineCityAssistant
+import com.santiya.localaihub.offlinecity.OfflineCityLocationProvider
+import com.santiya.localaihub.offlinecity.OfflineCityStorage
+import com.santiya.localaihub.hub.OpenClawLocalSettingsStore
+import com.santiya.googlelocalruntime.GoogleLocalMessage
 import com.dark.gguf_lib.toolcalling.ToolCall
 import com.dark.gguf_lib.toolcalling.ToolCallingConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -46,10 +57,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 enum class AgentPhase { Idle, Planning, Executing, Summarizing, Complete }
 
@@ -58,11 +74,16 @@ class ChatViewModel @Inject constructor(
     @ApplicationContext context: Context,
     private val chatManager: ChatManager
 ) : ViewModel() {
+    private val json = Json { ignoreUnknownKeys = true }
 
     private val appContext = context
     private val appSettings = AppSettingsDataStore(context)
+    private val openClawSettingsStore = OpenClawLocalSettingsStore(context)
     private val ttsDataStore = com.santiya.localaihub.tts.TTSDataStore(context)
-    // ControlVectorManager removed вЂ” will be re-added when new lib supports it
+    private val offlineCityStorage = OfflineCityStorage(context)
+    private val offlineCityAssistant = OfflineCityAssistant()
+    private val offlineCityLocationProvider = OfflineCityLocationProvider(context)
+    // ControlVectorManager removed РІР‚вЂќ will be re-added when new lib supports it
 
     val streamingEnabled: StateFlow<Boolean> = appSettings.streamingEnabled
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
@@ -108,7 +129,7 @@ class ChatViewModel @Inject constructor(
     private val _currentToolChainRound = MutableStateFlow(0)
     val currentToolChainRound: StateFlow<Int> = _currentToolChainRound
 
-    // Agent phase state (Plan в†’ Execute в†’ Summarize)
+    // Agent phase state (Plan РІвЂ вЂ™ Execute РІвЂ вЂ™ Summarize)
     private val _agentPhase = MutableStateFlow(AgentPhase.Idle)
     val agentPhase: StateFlow<AgentPhase> = _agentPhase.asStateFlow()
 
@@ -137,11 +158,18 @@ class ChatViewModel @Inject constructor(
 
     // Current model ID for per-message attribution
     private val currentModelId: String?
-        get() = LlmModelWorker.currentGgufModelId.value
+        get() = LlmModelWorker.currentGoogleLocalModelId.value ?: LlmModelWorker.currentGgufModelId.value
 
     /** True when a text generation model is loaded. */
     private val isAnyTextModelLoaded: Boolean
-        get() = LlmModelWorker.isGgufModelLoaded.value
+        get() = LlmModelWorker.isGgufModelLoaded.value || LlmModelWorker.isGoogleLocalModelLoaded.value
+
+    private val currentTextProviderType: ProviderType?
+        get() = when {
+            LlmModelWorker.isGoogleLocalModelLoaded.value -> ProviderType.GOOGLE_LOCAL
+            LlmModelWorker.isGgufModelLoaded.value -> ProviderType.GGUF
+            else -> null
+        }
 
     // UI state
     private val _showDynamicWindow = MutableStateFlow(false)
@@ -153,22 +181,56 @@ class ChatViewModel @Inject constructor(
     private val _currentGenerationType = MutableStateFlow(ModelType.TEXT_GENERATION)
     val currentGenerationType: StateFlow<ModelType> = _currentGenerationType
 
-    // Thinking mode toggle вЂ” when enabled, adds /think to system prompt for supported models
+    // Thinking mode toggle РІР‚вЂќ when enabled, adds /think to system prompt for supported models
     private val _thinkingModeEnabled = MutableStateFlow(false)
     val thinkingModeEnabled: StateFlow<Boolean> = _thinkingModeEnabled.asStateFlow()
+    private val _openClawEnabled = MutableStateFlow(false)
+    val openClawEnabled: StateFlow<Boolean> = _openClawEnabled.asStateFlow()
+    private val _openClawMode = MutableStateFlow(OpenClawMode.NORMAL)
+    val openClawMode: StateFlow<OpenClawMode> = _openClawMode.asStateFlow()
     private val _modelSupportsThinking = MutableStateFlow(false)
     val modelSupportsThinking: StateFlow<Boolean> = _modelSupportsThinking.asStateFlow()
 
+    data class OpenClawUiFlags(
+        val generationType: ModelType,
+        val openClawEnabled: Boolean,
+        val thinkingEnabled: Boolean,
+        val modelSupportsThinking: Boolean,
+        val openClawMode: OpenClawMode,
+    )
+
     fun toggleThinkingMode() {
-        _thinkingModeEnabled.value = !_thinkingModeEnabled.value
+        setThinkingMode(!_thinkingModeEnabled.value)
     }
 
     fun setThinkingMode(enabled: Boolean) {
         _thinkingModeEnabled.value = enabled
+        _openClawMode.value = if (enabled) OpenClawMode.THINKING else OpenClawMode.NORMAL
+    }
+
+    fun setOpenClawMode(mode: OpenClawMode) {
+        _openClawMode.value = mode
+        _thinkingModeEnabled.value = mode == OpenClawMode.THINKING
+        persistOpenClawSessionState()
+    }
+
+    fun setOpenClawEnabled(enabled: Boolean) {
+        _openClawEnabled.value = enabled
+        syncOpenClawToolsFromSettings(enabled)
+        persistOpenClawSessionState()
+    }
+
+    fun toggleOpenClawEnabled() {
+        setOpenClawEnabled(!_openClawEnabled.value)
     }
 
     // Model state
-    val isTextModelLoaded = LlmModelWorker.isGgufModelLoaded
+    val isTextModelLoaded: StateFlow<Boolean> = combine(
+        LlmModelWorker.isGgufModelLoaded,
+        LlmModelWorker.isGoogleLocalModelLoaded
+    ) { ggufLoaded, googleLoaded ->
+        ggufLoaded || googleLoaded
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val isImageModelLoaded = LlmModelWorker.isDiffusionModelLoaded
     val isVlmLoaded = LlmModelWorker.isVlmLoaded
 
@@ -186,12 +248,15 @@ class ChatViewModel @Inject constructor(
     private val _currentRagResults = MutableStateFlow<List<RagQueryDisplayResult>>(emptyList())
     val currentRagResults: StateFlow<List<RagQueryDisplayResult>> = _currentRagResults
 
-    // в”Ђв”Ђ Context Usage в”Ђв”Ђ
+    private val _offlineCityAnswer = MutableStateFlow<OfflineCityAnswer?>(null)
+    val offlineCityAnswer: StateFlow<OfflineCityAnswer?> = _offlineCityAnswer.asStateFlow()
+
+    // РІвЂќР‚РІвЂќР‚ Context Usage РІвЂќР‚РІвЂќР‚
 
     private val _contextUsagePercent = MutableStateFlow(0f)
     val contextUsagePercent: StateFlow<Float> = _contextUsagePercent.asStateFlow()
 
-    // в”Ђв”Ђ Grouped State Flows (for optimized recomposition) в”Ђв”Ђ
+    // РІвЂќР‚РІвЂќР‚ Grouped State Flows (for optimized recomposition) РІвЂќР‚РІвЂќР‚
 
     val streamingState: StateFlow<StreamingState> = combine(
         _streamingUserMessage,
@@ -205,15 +270,19 @@ class ChatViewModel @Inject constructor(
 
     val chatUiState: StateFlow<ChatUiState> = combine(
         combine(_isGenerating, _currentChatId, _error) { gen, chatId, err -> Triple(gen, chatId, err) },
-        combine(_currentGenerationType, _thinkingModeEnabled, _modelSupportsThinking) { type, think, supports -> Triple(type, think, supports) }
-    ) { (gen, chatId, err), (type, think, supports) ->
+        combine(_currentGenerationType, _openClawEnabled, _thinkingModeEnabled, _modelSupportsThinking, _openClawMode) { type, enabled, think, supports, mode ->
+            OpenClawUiFlags(type, enabled, think, supports, mode)
+        }
+    ) { (gen, chatId, err), flags ->
         ChatUiState(
             isGenerating = gen,
             currentChatId = chatId,
             error = err,
-            generationType = type,
-            thinkingEnabled = think,
-            modelSupportsThinking = supports
+            generationType = flags.generationType,
+            openClawEnabled = flags.openClawEnabled,
+            thinkingEnabled = flags.thinkingEnabled,
+            modelSupportsThinking = flags.modelSupportsThinking,
+            openClawMode = flags.openClawMode
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ChatUiState())
 
@@ -246,15 +315,25 @@ class ChatViewModel @Inject constructor(
     // ==================== Auto-restore last chat ====================
 
     init {
+        runCatching {
+            val settings = openClawSettingsStore.read()
+            _openClawEnabled.value = if (settings.lastSessionEnabled) true else settings.enabledByDefault
+            _openClawMode.value = settings.lastSessionMode
+            _thinkingModeEnabled.value = settings.lastSessionMode == OpenClawMode.THINKING
+            syncOpenClawToolsFromSettings(_openClawEnabled.value)
+            restorePersistedOpenClawRuntime(settings)
+        }
+
         viewModelScope.launch {
             try {
-                val lastChatId = appSettings.lastChatId.first()
+                val lastChatId = openClawSettingsStore.read().lastSessionChatId ?: appSettings.lastChatId.first()
                 if (lastChatId != null) {
                     chatManager.getChatMessages(lastChatId).onSuccess { loadedMessages ->
                         if (loadedMessages.isNotEmpty()) {
                             _currentChatId.value = lastChatId
                             _messages.clear()
                             _messages.addAll(loadedMessages)
+                            restoreAgentSessionFromMessages(loadedMessages)
                             AppStateManager.setHasMessages(true)
                         }
                     }
@@ -269,26 +348,122 @@ class ChatViewModel @Inject constructor(
             try {
                 _currentChatId.collect { chatId ->
                     appSettings.saveLastChatId(chatId)
+                    persistOpenClawSessionState()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Chat ID persistence failed: ${e.message}")
             }
         }
 
+        viewModelScope.launch {
+            BrowserToolState.state.collect {
+                persistOpenClawSessionState()
+            }
+        }
+
         // Check thinking support whenever text model loads/unloads
         viewModelScope.launch {
-            LlmModelWorker.isGgufModelLoaded.collect { loaded ->
-                if (loaded) {
+            combine(
+                LlmModelWorker.isGgufModelLoaded,
+                LlmModelWorker.isGoogleLocalModelLoaded
+            ) { ggufLoaded, googleLoaded ->
+                ggufLoaded to googleLoaded
+            }.collect { (ggufLoaded, googleLoaded) ->
+                if (ggufLoaded) {
                     val supports = LlmModelWorker.supportsThinkingGguf()
                     _modelSupportsThinking.value = supports
-                    // Auto-disable thinking if model doesn't support it
-                    if (!supports) _thinkingModeEnabled.value = false
+                    if (!supports && _openClawMode.value == OpenClawMode.THINKING) {
+                        _thinkingModeEnabled.value = false
+                        _openClawMode.value = OpenClawMode.NORMAL
+                    }
                 } else {
                     _modelSupportsThinking.value = false
-                    _thinkingModeEnabled.value = false
+                    if (googleLoaded || _openClawMode.value == OpenClawMode.THINKING) {
+                        _thinkingModeEnabled.value = false
+                        _openClawMode.value = OpenClawMode.NORMAL
+                    }
                 }
             }
         }
+    }
+
+    private fun persistOpenClawSessionState() {
+        runCatching {
+            val current = openClawSettingsStore.read()
+            openClawSettingsStore.write(
+                current.copy(
+                    lastSessionEnabled = _openClawEnabled.value,
+                    lastSessionMode = _openClawMode.value,
+                    lastSessionChatId = _currentChatId.value,
+                    lastAgentPlan = _agentPlan.value,
+                    lastAgentSummary = _agentSummary.value,
+                    lastToolChainStepsJson = _toolChainSteps.value.takeIf { it.isNotEmpty() }?.let(json::encodeToString),
+                    lastBrowserUrl = BrowserToolState.state.value.currentUrl,
+                    lastBrowserTitle = BrowserToolState.state.value.pageTitle,
+                    lastOfflineCityAnswerJson = _offlineCityAnswer.value?.let(json::encodeToString),
+                )
+            )
+        }
+    }
+
+    private fun restorePersistedOpenClawRuntime(settings: com.santiya.localaihub.hub.OpenClawLocalSettings) {
+        runCatching {
+            BrowserToolState.restore(
+                BrowserSessionSnapshot(
+                    currentUrl = settings.lastBrowserUrl,
+                    pageTitle = settings.lastBrowserTitle,
+                ).takeIf { !it.currentUrl.isNullOrBlank() || !it.pageTitle.isNullOrBlank() }
+            )
+            _offlineCityAnswer.value = settings.lastOfflineCityAnswerJson
+                ?.takeIf { it.isNotBlank() }
+                ?.let { json.decodeFromString<OfflineCityAnswer>(it) }
+            _agentPlan.value = settings.lastAgentPlan
+            _agentSummary.value = settings.lastAgentSummary
+            _toolChainSteps.value = settings.lastToolChainStepsJson
+                ?.takeIf { it.isNotBlank() }
+                ?.let { json.decodeFromString<List<ToolChainStepData>>(it) }
+                .orEmpty()
+            _currentToolChainRound.value = _toolChainSteps.value.maxOfOrNull { it.round } ?: 0
+            _agentPhase.value = when {
+                _agentSummary.value != null -> AgentPhase.Complete
+                _agentPlan.value != null || _toolChainSteps.value.isNotEmpty() -> AgentPhase.Executing
+                else -> AgentPhase.Idle
+            }
+        }
+    }
+
+    private fun restoreAgentSessionFromMessages(loadedMessages: List<Messages>) {
+        val lastAssistant = loadedMessages.lastOrNull { it.role == Role.Assistant }
+        _agentPlan.value = lastAssistant?.agentPlan
+        _agentSummary.value = lastAssistant?.agentSummary
+        _toolChainSteps.value = lastAssistant?.toolChainSteps.orEmpty()
+        _currentToolChainRound.value = _toolChainSteps.value.maxOfOrNull { it.round } ?: 0
+        _agentPhase.value = when {
+            lastAssistant?.agentSummary != null -> AgentPhase.Complete
+            lastAssistant?.agentPlan != null || !lastAssistant?.toolChainSteps.isNullOrEmpty() -> AgentPhase.Executing
+            else -> AgentPhase.Idle
+        }
+        persistOpenClawSessionState()
+    }
+
+    private fun syncOpenClawToolsFromSettings(enabled: Boolean = _openClawEnabled.value) {
+        val settings = runCatching { openClawSettingsStore.read() }.getOrNull() ?: return
+        val selectedSkills = settings.selectedSkillIds
+            .takeIf { it.isNotEmpty() }
+            ?.toSet()
+            ?: setOf("travel_offline", "browser", "files", "memory")
+        val selectedTools = settings.selectedApiToolIds
+            .takeIf { it.isNotEmpty() }
+            ?.toSet()
+            ?: setOf("web_search", "browser", "api_models", "support_logs")
+
+        PluginManager.enableWebSearch(enabled && "web_search" in selectedTools)
+        PluginManager.togglePlugin("Browser", enabled && "browser" in selectedTools)
+        PluginManager.togglePlugin("File Manager", enabled && "files" in selectedSkills)
+        PluginManager.togglePlugin("NotePad", enabled && "memory" in selectedSkills)
+        PluginManager.togglePlugin("Automation", enabled && "automation" in selectedSkills)
+        PluginManager.togglePlugin("System Info", enabled && "system_info" in selectedTools)
+        PluginManager.togglePlugin("Location Control", enabled && "location_control" in selectedTools)
     }
 
     // ==================== RAG Controls ====================
@@ -341,16 +516,21 @@ class ChatViewModel @Inject constructor(
         _agentSummary.value = null
         _currentRagContext.value = null
         _currentRagResults.value = emptyList()
+        _offlineCityAnswer.value = null
         AppStateManager.setHasMessages(false)
+        persistOpenClawSessionState()
     }
 
     fun loadChat(chatId: String) {
         viewModelScope.launch {
             try {
+                _offlineCityAnswer.value = null
+                persistOpenClawSessionState()
                 _currentChatId.value = chatId
                 chatManager.getChatMessages(chatId).onSuccess { loadedMessages ->
                     _messages.clear()
                     _messages.addAll(loadedMessages)
+                    restoreAgentSessionFromMessages(loadedMessages)
                     AppStateManager.setHasMessages(loadedMessages.isNotEmpty())
                 }.onFailure { e ->
                     reportError("Failed to load chat: ${e.message}")
@@ -365,7 +545,7 @@ class ChatViewModel @Inject constructor(
     // ==================== Model Selection ====================
 
     fun switchToTextGeneration() {
-        if (!LlmModelWorker.isGgufModelLoaded.value) {
+        if (!isAnyTextModelLoaded) {
             _error.value = "Text generation model not loaded"
             return
         }
@@ -383,15 +563,27 @@ class ChatViewModel @Inject constructor(
     // ==================== Unified Text Generation Entry Point ====================
 
     fun sendChat(prompt: String) {
+        maybeBuildOfflineCityAnswer(prompt)?.let { answer ->
+            sendOfflineCityChat(prompt, answer)
+            return
+        }
+        _offlineCityAnswer.value = null
+        persistOpenClawSessionState()
+        if (!isAnyTextModelLoaded) {
+            runCatching { kotlinx.coroutines.runBlocking { recoverPersistedTextModelIfNeeded() } }
+                .onFailure { Log.w(TAG, "Text-model recovery failed before send: ${it.message}") }
+        }
         if (!isAnyTextModelLoaded) {
             val hint = if (LlmModelWorker.isDiffusionModelLoaded.value)
-                "You have an image model loaded вЂ” switch to image mode, or load a text model for chat"
+                "You have an image model loaded РІР‚вЂќ switch to image mode, or load a text model for chat"
             else
                 "Please load a text generation model first"
             reportError(hint)
             return
         }
-        if (_isGenerating.value) return
+        if (_isGenerating.value) {
+            stop()
+        }
 
         _isGenerating.value = true
         _streamingUserMessage.value = prompt
@@ -410,6 +602,7 @@ class ChatViewModel @Inject constructor(
 
         generationJob = viewModelScope.launch {
             try {
+                Log.d(TAG, "sendChat provider=$currentTextProviderType openClaw=${_openClawEnabled.value} promptLen=${prompt.length}")
                 // Let Compose render the StreamingView before native engine saturates CPU
                 kotlinx.coroutines.yield()
 
@@ -417,9 +610,22 @@ class ChatViewModel @Inject constructor(
                 val maxTokens = getCurrentModelMaxTokens()
 
                 val isNewChat = isNewConversation
+                syncOpenClawToolsFromSettings(_openClawEnabled.value)
                 val hasTools = PluginManager.hasEnabledTools()
                         && PluginManager.isToolCallingModelLoaded.value
-                LlmModelWorker.setThinkingEnabledGguf(_thinkingModeEnabled.value && !hasTools)
+                val selectedMode = if (_openClawEnabled.value) _openClawMode.value else OpenClawMode.NORMAL
+                val useOpenClawAgent = _openClawEnabled.value
+                val useOrchestra = selectedMode == OpenClawMode.ORCHESTRA
+                val useThinking = selectedMode == OpenClawMode.THINKING
+                if (currentTextProviderType == ProviderType.GOOGLE_LOCAL && (hasTools || useThinking || useOrchestra)) {
+                    reportError("Google Local сейчас работает только как обычный чат. Для думающего режима и инструментов OpenClaw загрузите локальную GGUF-модель.")
+                    return@launch
+                }
+                if (useOrchestra && !hasTools) {
+                    reportError("OpenClaw Orchestra requires local tools and a loaded local tool-capable model.")
+                    return@launch
+                }
+                LlmModelWorker.setThinkingEnabledGguf(useThinking && !hasTools)
                 val ragContext = _currentRagContext.value
 
                 // For existing chats, save user message upfront
@@ -436,12 +642,13 @@ class ChatViewModel @Inject constructor(
                     }
                 }
 
-                if (hasTools) {
+                if (useOpenClawAgent) {
                     agentFlow(prompt, ragContext, maxTokens, isNewChat)
                 } else {
                     simpleFlow(prompt, ragContext, maxTokens, isNewChat)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.d(TAG, "sendChat cancelled cleanly")
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Error in sendChat", e)
@@ -455,13 +662,115 @@ class ChatViewModel @Inject constructor(
     // Keep old name as alias for backward compatibility with callers
     fun sendTextMessage(prompt: String) = sendChat(prompt)
 
+    private suspend fun recoverPersistedTextModelIfNeeded() {
+        if (isAnyTextModelLoaded) return
+        val activeState = runCatching { appSettings.activeModelStateSnapshot() }.getOrNull() ?: return
+        if (!activeState.hasSelection || activeState.activationState != ActiveModelActivationState.ACTIVE) return
+
+        val modelId = activeState.modelId ?: return
+        val repository = AppContainer.getModelRepository()
+        val model = runCatching { repository.getModelById(modelId) }.getOrNull() ?: return
+
+        when {
+            activeState.providerTypeName == ProviderType.GOOGLE_LOCAL.name ||
+                GoogleLocalSupport.shouldPreferForGemma(appContext, model.id, model.modelName) -> {
+                val descriptor = GoogleLocalSupport.buildGemmaDescriptor(model.id, model.modelName)
+                val success = kotlinx.coroutines.runBlocking {
+                    LlmModelWorker.loadGoogleLocalModel(appContext, descriptor)
+                }
+                if (success) {
+                    LlmModelWorker.setCurrentGoogleLocalModelId(model.id)
+                    LlmModelWorker.setCurrentGgufModelId(null)
+                }
+            }
+            else -> {
+                val config = runCatching { repository.getConfigByModelId(modelId) }.getOrNull() ?: return
+                val success = kotlinx.coroutines.runBlocking {
+                    LlmModelWorker.loadGgufModel(model, config)
+                }
+                if (success) {
+                    LlmModelWorker.setCurrentGgufModelId(model.id)
+                }
+            }
+        }
+    }
+
+    private fun maybeBuildOfflineCityAnswer(prompt: String): OfflineCityAnswer? {
+        if (!OfflineCityAssistant.looksLikeTravelQuery(prompt)) return null
+        val dataset = offlineCityStorage.loadDataset() ?: return null
+        val language = com.santiya.localaihub.global.AppLanguageManager.readPersistedLanguage(appContext)
+        val location = runCatching { offlineCityLocationProvider.readLastKnownLocation() }.getOrNull()
+        return offlineCityAssistant.answer(dataset, prompt, language, location)
+    }
+
+    private fun sendOfflineCityChat(prompt: String, answer: OfflineCityAnswer) {
+        if (_isGenerating.value) return
+        _offlineCityAnswer.value = answer
+        persistOpenClawSessionState()
+        _isGenerating.value = true
+        _streamingUserMessage.value = prompt
+        _streamingAssistantMessage.value = answer.body
+        userMessageAdded.set(false)
+        currentMetrics = null
+        _error.value = null
+        currentUserMessage = Messages(
+            msgId = "",
+            role = Role.User,
+            content = MessageContent(contentType = ContentType.Text, content = prompt),
+            modelId = currentModelId,
+        )
+        AppStateManager.setHasMessages(true)
+        AppStateManager.setGeneratingText()
+
+        generationJob = viewModelScope.launch {
+            try {
+                val assistantText = buildString {
+                    append(answer.title)
+                    append("\n")
+                    append(answer.body)
+                }
+                if (isNewConversation) {
+                    createChatWithMessages(prompt, assistantText, null)
+                } else {
+                    val chatId = _currentChatId.value ?: return@launch
+                    chatManager.addUserMessage(chatId, prompt).onSuccess { userMsg ->
+                        currentUserMessage = userMsg
+                    }.onFailure { e ->
+                        reportError("Failed to save message: ${e.message}")
+                        return@launch
+                    }
+                    val pendingUserMsg = currentUserMessage
+                    if (!userMessageAdded.get() && pendingUserMsg != null) {
+                        _messages.add(pendingUserMsg)
+                        userMessageAdded.set(true)
+                    }
+                    val assistantMessage = Messages(
+                        role = Role.Assistant,
+                        content = MessageContent(contentType = ContentType.Text, content = assistantText),
+                        modelId = currentModelId,
+                    )
+                    _messages.add(assistantMessage)
+                    chatManager.addMessage(chatId, assistantMessage)
+                    AppStateManager.setGenerationComplete()
+                    AppStateManager.chatRefreshed()
+                    viewModelScope.launch { autoSpeakIfEnabled(assistantText, assistantMessage.msgId) }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in offline city sendChat", e)
+                reportError(e.message)
+            } finally {
+                resetStreamingState()
+            }
+        }
+    }
+
     /**
      * Send a message with images (VLM). Requires a VLM projector to be loaded.
      * @param prompt User's text prompt
      * @param imageData List of raw image file bytes (JPEG/PNG)
      */
     fun sendChatWithImages(prompt: String, imageData: List<ByteArray>) {
-        if (!LlmModelWorker.isGgufModelLoaded.value) {
+        if (!isAnyTextModelLoaded) {
             reportError("Please load a text generation model first")
             return
         }
@@ -572,12 +881,12 @@ class ChatViewModel @Inject constructor(
      * Regenerate the last assistant response.
      * Removes the last assistant message and re-sends the last user prompt.
      */
-    // Snapshot of old assistant message during regeneration вЂ” restored if stop() is
+    // Snapshot of old assistant message during regeneration РІР‚вЂќ restored if stop() is
     // called before new content arrives (fixes issue #77: message disappears on cancel)
     private var regenerationSnapshot: Messages? = null
 
     fun regenerateLastMessage() {
-        if (!LlmModelWorker.isGgufModelLoaded.value) {
+        if (!isAnyTextModelLoaded) {
             _error.value = "Please load a text generation model first"
             return
         }
@@ -592,7 +901,7 @@ class ChatViewModel @Inject constructor(
             return
         }
 
-        // Snapshot the old assistant message вЂ” remove from UI but keep for rollback
+        // Snapshot the old assistant message РІР‚вЂќ remove from UI but keep for rollback
         val lastAssistantMsg = _messages.lastOrNull { it.role == Role.Assistant }
         regenerationSnapshot = lastAssistantMsg
         if (lastAssistantMsg != null) {
@@ -606,25 +915,33 @@ class ChatViewModel @Inject constructor(
         _streamingUserMessage.value = prompt
         _streamingAssistantMessage.value = ""
         currentUserMessage = lastUserMsg // needed for stop() rollback
-        userMessageAdded.set(true) // already added вЂ” skip re-adding user message
+        userMessageAdded.set(true) // already added РІР‚вЂќ skip re-adding user message
         currentMetrics = null
         _error.value = null
 
         generationJob = viewModelScope.launch {
             try {
                 val maxTokens = getCurrentModelMaxTokens()
+                syncOpenClawToolsFromSettings(_openClawEnabled.value)
                 val hasTools = PluginManager.hasEnabledTools()
                         && PluginManager.isToolCallingModelLoaded.value
-                LlmModelWorker.setThinkingEnabledGguf(_thinkingModeEnabled.value && !hasTools)
+                val selectedMode = if (_openClawEnabled.value) _openClawMode.value else OpenClawMode.NORMAL
+                val useOpenClawAgent = _openClawEnabled.value
+                val useOrchestra = selectedMode == OpenClawMode.ORCHESTRA
+                val useThinking = selectedMode == OpenClawMode.THINKING
+                if (useOrchestra && !hasTools) {
+                    reportError("OpenClaw Orchestra requires local tools and a loaded local tool-capable model.")
+                    return@launch
+                }
+                LlmModelWorker.setThinkingEnabledGguf(useThinking && !hasTools)
                 val ragContext = _currentRagContext.value
-
-                if (hasTools) {
+                if (useOpenClawAgent) {
                     agentFlow(prompt, ragContext, maxTokens, isNewChat = false, isRegeneration = true)
                 } else {
                     simpleFlow(prompt, ragContext, maxTokens, isNewChat = false, isRegeneration = true)
                 }
 
-                // Generation completed successfully вЂ” now delete old message from DB
+                // Generation completed successfully РІР‚вЂќ now delete old message from DB
                 if (lastAssistantMsg != null) {
                     chatManager.deleteMessage(lastAssistantMsg.msgId)
                 }
@@ -649,9 +966,10 @@ class ChatViewModel @Inject constructor(
     }
 
     private suspend fun getCurrentModelMaxTokens(): Int =
-        getGgufModelSchema().inferenceParams.maxTokens
+        if (currentTextProviderType == ProviderType.GOOGLE_LOCAL) 2048
+        else getGgufModelSchema().inferenceParams.maxTokens
 
-    // ==================== Agent Flow (Plan в†’ Execute в†’ Summarize) ====================
+    // ==================== Agent Flow (Plan РІвЂ вЂ™ Execute РІвЂ вЂ™ Summarize) ====================
 
     private suspend fun agentFlow(
         prompt: String,
@@ -661,27 +979,36 @@ class ChatViewModel @Inject constructor(
         isRegeneration: Boolean = false
     ) {
         val fullPrompt = ragContext?.let { "$it\n\n$prompt" } ?: prompt
+        val directToolSequence = buildDirectAgentToolSequence(fullPrompt)
 
-        // Phase 1: Plan
-        _agentPhase.value = AgentPhase.Planning
-        AppStateManager.setGeneratingText()
-        Log.d(TAG, "Agent Phase 1: Generating plan")
-        val plan = generatePlan(fullPrompt)
+        val plan = if (directToolSequence.isNotEmpty()) {
+            directToolSequence.joinToString("\n") { "- ${it.planLine}" }
+        } else {
+            _agentPhase.value = AgentPhase.Planning
+            AppStateManager.setGeneratingText()
+            Log.d(TAG, "Agent Phase 1: Generating plan")
+            val generatedPlan = generatePlan(fullPrompt)
+            _agentPlan.value = generatedPlan
+            Log.d(TAG, "Agent plan: $generatedPlan")
+            generatedPlan
+        }
         _agentPlan.value = plan
-        Log.d(TAG, "Agent plan: $plan")
 
         // Phase 2: Bounded generate-execute loop
         _agentPhase.value = AgentPhase.Executing
         _streamingAssistantMessage.value = ""
-        Log.d(TAG, "Agent Phase 2: Generate в†’ Execute loop")
-        val steps = executeAgentLoop(fullPrompt, plan)
+        Log.d(TAG, "Agent Phase 2: Generate РІвЂ вЂ™ Execute loop")
+        val steps = if (directToolSequence.isNotEmpty()) {
+            executeDirectToolSequence(directToolSequence)
+        } else {
+            executeAgentLoop(fullPrompt, plan)
+        }
         Log.d(TAG, "Agent execution complete: ${steps.size} steps executed")
 
         // If no tools were executed or all failed, fall back to simple text generation
         if (steps.isEmpty() || steps.all { !it.success }) {
-            Log.d(TAG, "No successful tool calls, falling back to simple flow")
-            _agentPhase.value = AgentPhase.Idle
-            _agentPlan.value = null
+            _agentPhase.value = AgentPhase.Complete
+            persistOpenClawSessionState()
             PluginManager.clearGrammar()
             simpleFlow(prompt, ragContext, maxTokens, isNewChat, isRegeneration)
             return
@@ -692,10 +1019,15 @@ class ChatViewModel @Inject constructor(
         _streamingAssistantMessage.value = ""
         AppStateManager.setGeneratingText()
         Log.d(TAG, "Agent Phase 3: Generating summary")
-        val summary = generateSummary(fullPrompt, steps)
+        val summary = if (directToolSequence.isNotEmpty()) {
+            buildDeterministicAgentSummary(fullPrompt, steps)
+        } else {
+            generateSummary(fullPrompt, steps)
+        }
         _agentSummary.value = summary
         _streamingAssistantMessage.value = summary
         _agentPhase.value = AgentPhase.Complete
+        persistOpenClawSessionState()
         Log.d(TAG, "Agent flow complete")
 
         // Persist
@@ -717,12 +1049,14 @@ class ChatViewModel @Inject constructor(
             JSONObject().put("role", "system").put("content", systemPrompt),
             JSONObject().put("role", "user").put("content", prompt)
         )
-        return generatePlainText(messages, maxTokens = PLAN_MAX_TOKENS)
+        return withTimeoutOrNull(15_000L) {
+            generatePlainText(messages, maxTokens = PLAN_MAX_TOKENS)
+        }?.takeIf { it.isNotBlank() } ?: buildFallbackPlan(prompt)
     }
 
     /**
-     * Phase 2: Bounded generate в†’ execute loop.
-     * Each round: generate 1 tool call (grammar-constrained) в†’ execute it в†’ feed result back.
+     * Phase 2: Bounded generate РІвЂ вЂ™ execute loop.
+     * Each round: generate 1 tool call (grammar-constrained) РІвЂ вЂ™ execute it РІвЂ вЂ™ feed result back.
      * Stops when: no tool call generated, duplicate detected, or max rounds reached.
      */
     private suspend fun executeAgentLoop(
@@ -809,6 +1143,7 @@ class ChatViewModel @Inject constructor(
                 // Execute
                 val (toolName, argsObj) = parsed
                 val normalizedName = normalizeToolName(toolName)
+                repairToolArgumentsFromPrompt(normalizedName, argsObj, prompt)
 
                 // Validate tool name against enabled tools
                 if (normalizedName.lowercase() !in enabledNames) {
@@ -912,6 +1247,25 @@ class ChatViewModel @Inject constructor(
         return steps
     }
 
+    private fun repairToolArgumentsFromPrompt(
+        normalizedToolName: String,
+        argsObj: JSONObject,
+        prompt: String
+    ) {
+        if (normalizedToolName != "browser_open_url") return
+        val currentUrl = argsObj.optString("url").trim()
+        if (currentUrl.contains('.')) return
+        val promptDomain = Regex("""\b([a-zA-Z0-9-]+\.[a-zA-Z0-9.-]+)\b""")
+            .find(prompt)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            .orEmpty()
+        if (promptDomain.isNotBlank()) {
+            argsObj.put("url", promptDomain)
+        }
+    }
+
     /** Phase 3: Generate a natural language summary from all tool results. */
     private suspend fun generateSummary(
         prompt: String,
@@ -929,9 +1283,280 @@ class ChatViewModel @Inject constructor(
             JSONObject().put("role", "system").put("content", systemPrompt),
             JSONObject().put("role", "user").put("content", userContent)
         )
-        val summary = generatePlainText(messages, maxTokens = SUMMARY_MAX_TOKENS)
+        val summary = withTimeoutOrNull(25_000L) {
+            generatePlainText(messages, maxTokens = SUMMARY_MAX_TOKENS)
+        }?.takeIf { it.isNotBlank() } ?: buildDeterministicAgentSummary(prompt, steps)
         PluginManager.restoreGrammar()  // Re-enable grammar for next message
         return summary
+    }
+
+    private data class DirectAgentToolSpec(
+        val toolName: String,
+        val args: JSONObject,
+        val planLine: String,
+    )
+
+    private fun buildDirectAgentToolSequence(prompt: String): List<DirectAgentToolSpec> {
+        val normalized = prompt.lowercase(Locale.ROOT)
+        val enabledTools = PluginManager.getEnabledToolNames().map { it.lowercase(Locale.ROOT) }.toSet()
+        val steps = mutableListOf<DirectAgentToolSpec>()
+
+        val wantsTrends = listOf("trend", "trends", "тренд", "тренды").any { normalized.contains(it) }
+        val wantsWebSearch = listOf("google", "гугл", "web search", "search web", "загугл").any { normalized.contains(it) }
+        if ((wantsTrends || wantsWebSearch) && "web_search" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "web_search",
+                args = JSONObject().put("query", prompt).put("max_results", 3),
+                planLine = "Search the web for the latest AI trend signals and collect top sources"
+            )
+        }
+
+        val explicitUrl = Regex("""\b((?:https?://)?[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/\S*)?)\b""")
+            .find(prompt)
+            ?.groupValues
+            ?.getOrNull(1)
+        val wantsBrowser = listOf("open", "browser", "брауз", "открой").any { normalized.contains(it) }
+        if (!explicitUrl.isNullOrBlank() && wantsBrowser && "browser_open_url" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "browser_open_url",
+                args = JSONObject().put("url", explicitUrl),
+                planLine = "Open the requested page in the embedded browser"
+            )
+        }
+
+        val wantsGps = listOf("gps", "location", "геолокац", "локац", "джипиес").any { normalized.contains(it) }
+        val wantsScript = listOf("script", "скрипт").any { normalized.contains(it) }
+        if (wantsGps && wantsScript) {
+            val enableLocation = listOf("enable", "turn on", "включ", "on").any { normalized.contains(it) } &&
+                !listOf("disable", "turn off", "выключ", "off").any { normalized.contains(it) }
+            val scriptPath = if (enableLocation) "automation/toggle_location_on.sh" else "automation/toggle_location_off.sh"
+            if ("create_file" in enabledTools) {
+                val scriptBody = buildString {
+                    appendLine("#!/system/bin/sh")
+                    appendLine("cmd location set-location-enabled ${if (enableLocation) "true" else "false"}")
+                }
+                steps += DirectAgentToolSpec(
+                    toolName = "create_file",
+                    args = JSONObject()
+                        .put("path", scriptPath)
+                        .put("content", scriptBody)
+                        .put("append", false),
+                    planLine = "Write a shell script for the requested location toggle"
+                )
+            }
+            if ("execute_script" in enabledTools) {
+                steps += DirectAgentToolSpec(
+                    toolName = "execute_script",
+                    args = JSONObject()
+                        .put("path", scriptPath)
+                        .put("interpreter", "sh")
+                        .put("timeout_seconds", 12),
+                    planLine = "Run the generated shell script inside the app sandbox"
+                )
+            }
+            if ("get_location_status" in enabledTools) {
+                steps += DirectAgentToolSpec(
+                    toolName = "get_location_status",
+                    args = JSONObject(),
+                    planLine = "Read back the current Android location-services state"
+                )
+            }
+        }
+
+        return steps
+    }
+
+    private suspend fun executeDirectToolSequence(
+        specs: List<DirectAgentToolSpec>
+    ): List<ToolChainStepData> {
+        val steps = mutableListOf<ToolChainStepData>()
+        _toolChainSteps.value = emptyList()
+        var consecutiveFailures = 0
+
+        specs.forEachIndexed { index, spec ->
+            _currentToolChainRound.value = index + 1
+            AppStateManager.setExecutingPlugin("", spec.toolName)
+            val toolCall = ToolCall(name = spec.toolName, arguments = spec.args)
+            val result = PluginManager.executeToolForMultiTurn(toolCall)
+            val isSuccess = !result.isError
+
+            if (isSuccess) {
+                consecutiveFailures = 0
+                AppStateManager.setPluginExecutionComplete(
+                    pluginName = result.pluginName,
+                    toolName = spec.toolName,
+                    success = true,
+                    executionTimeMs = result.executionTimeMs
+                )
+            } else {
+                consecutiveFailures++
+                AppStateManager.setPluginExecutionComplete(
+                    pluginName = result.pluginName,
+                    toolName = spec.toolName,
+                    success = false,
+                    executionTimeMs = result.executionTimeMs,
+                    errorMessage = result.resultJson
+                )
+            }
+
+            val step = ToolChainStepData(
+                round = index + 1,
+                toolName = spec.toolName,
+                pluginName = result.pluginName,
+                args = spec.args.toString(),
+                result = result.resultJson.take(2000),
+                executionTimeMs = result.executionTimeMs,
+                success = isSuccess
+            )
+            steps += step
+            _toolChainSteps.value = steps.toList()
+
+            if (result.rawData != null) {
+                val resultData = PluginResultData(
+                    pluginName = result.pluginName,
+                    toolName = spec.toolName,
+                    inputParams = spec.args.toString(),
+                    resultData = result.resultJson,
+                    success = isSuccess
+                )
+                val pluginMessage = Messages(
+                    role = Role.Assistant,
+                    content = MessageContent(
+                        contentType = ContentType.PluginResult,
+                        content = "Plugin '${result.pluginName}' executed tool '${spec.toolName}'",
+                        pluginResultData = resultData
+                    ),
+                    modelId = currentModelId,
+                    pluginMetrics = PluginExecutionMetrics(
+                        pluginName = result.pluginName,
+                        toolName = spec.toolName,
+                        executionTimeMs = result.executionTimeMs,
+                        success = isSuccess
+                    )
+                )
+                val pendingUserMsg = currentUserMessage
+                if (!userMessageAdded.get() && pendingUserMsg != null) {
+                    _messages.add(pendingUserMsg)
+                    userMessageAdded.set(true)
+                }
+                _messages.add(pluginMessage)
+            }
+
+            if (consecutiveFailures >= 2) return steps
+        }
+
+        return steps
+    }
+
+    private fun buildFallbackPlan(prompt: String): String {
+        val normalized = prompt.lowercase(Locale.ROOT)
+        return when {
+            listOf("trend", "trends", "тренд", "тренды").any { normalized.contains(it) } ->
+                "1. Search the web for AI trend signals.\n2. Summarize the top findings for the user."
+            listOf("gps", "location", "геолокац", "локац", "джипиес").any { normalized.contains(it) } ->
+                "1. Prepare a location-control script.\n2. Run it if Android allows the action.\n3. Read back the location status."
+            else ->
+                "1. Use available local tools if they are relevant.\n2. Summarize the result clearly for the user."
+        }
+    }
+
+    private fun buildDeterministicAgentSummary(
+        prompt: String,
+        steps: List<ToolChainStepData>
+    ): String {
+        if (steps.isEmpty()) {
+            return "I could not execute any local tools for this request."
+        }
+        val normalized = prompt.lowercase(Locale.ROOT)
+        if (steps.any { it.toolName == "web_search" }) {
+            val searchStep = steps.lastOrNull { it.toolName == "web_search" }
+            if (searchStep != null) {
+                runCatching {
+                    val json = JSONObject(searchStep.result)
+                    val results = json.optJSONArray("results")
+                    val bullets = buildList {
+                        if (results != null) {
+                            for (i in 0 until minOf(results.length(), 3)) {
+                                val item = results.optJSONObject(i) ?: continue
+                                val title = item.optString("title").ifBlank { "Untitled source" }
+                                val snippet = item.optString("snippet").replace("\n", " ").trim()
+                                val url = item.optString("url").trim()
+                                add(
+                                    buildString {
+                                        append("- ")
+                                        append(title)
+                                        if (snippet.isNotBlank()) {
+                                            append(": ")
+                                            append(snippet.take(220))
+                                        }
+                                        if (url.isNotBlank()) {
+                                            append(" (")
+                                            append(url)
+                                            append(")")
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    if (bullets.isNotEmpty()) {
+                        return buildString {
+                            appendLine("AI trends report")
+                            appendLine()
+                            if (listOf("2026", "2025", "2027").any { normalized.contains(it) }) {
+                                appendLine("Latest search results for the requested timeframe:")
+                            } else {
+                                appendLine("Latest search results:")
+                            }
+                            bullets.forEach { appendLine(it) }
+                        }.trim()
+                    }
+                }
+            }
+        }
+        if (steps.any { it.toolName == "execute_script" || it.toolName == "get_location_status" }) {
+            val scriptStep = steps.lastOrNull { it.toolName == "execute_script" }
+            val locationStep = steps.lastOrNull { it.toolName == "get_location_status" }
+            val statusLine = runCatching {
+                locationStep?.result?.let { JSONObject(it) }?.let { json ->
+                    when (json.optBoolean("enabled", false)) {
+                        true -> "Current location status: enabled."
+                        false -> "Current location status: disabled."
+                    }
+                }
+            }.getOrNull() ?: "Current location status could not be confirmed."
+            val scriptLine = runCatching {
+                scriptStep?.result?.let { JSONObject(it) }?.let { json ->
+                    val message = json.optString("message").ifBlank { "Script finished." }
+                    val path = json.optString("scriptPath")
+                    if (path.isNotBlank()) {
+                        "$message Script: $path"
+                    } else {
+                        message
+                    }
+                }
+            }.getOrNull() ?: "No script execution result was returned."
+            return buildString {
+                appendLine("Location automation result")
+                appendLine()
+                appendLine(scriptLine)
+                appendLine(statusLine)
+            }.trim()
+        }
+        return buildString {
+            appendLine("Request: $prompt")
+            appendLine()
+            appendLine("Executed steps:")
+            steps.forEach { step ->
+                append("- ")
+                append(step.pluginName)
+                append(" / ")
+                append(step.toolName)
+                append(": ")
+                append(step.result.replace("\n", " ").take(280))
+                appendLine()
+            }
+        }.trim()
     }
 
     /** Persist agent chat results to vault. */
@@ -1029,11 +1654,13 @@ class ChatViewModel @Inject constructor(
     ) {
         AppStateManager.setGeneratingText()
         val fullPrompt = ragContext?.let { "$it\n\n$prompt" } ?: prompt
+        Log.d(TAG, "simpleFlow provider=$currentTextProviderType newChat=$isNewChat maxTokens=$maxTokens promptLen=${fullPrompt.length}")
 
         if (isNewChat) {
             val conversationMessages = buildConversationMessages(fullPrompt)
             val genResult = generateWithToolCalls(conversationMessages, maxTokens)
             val finalResponse = filterToolCallSyntax(genResult.text)
+            Log.d(TAG, "simpleFlow newChat rawLen=${genResult.text.length} finalLen=${finalResponse.length}")
 
             _streamingAssistantMessage.value = finalResponse
             createChatWithMessages(prompt, finalResponse, currentMetrics)
@@ -1043,6 +1670,7 @@ class ChatViewModel @Inject constructor(
             val conversationMessages = buildConversationMessages(fullPrompt, isRegeneration)
             val genResult = generateWithToolCalls(conversationMessages, maxTokens)
             val finalResponse = filterToolCallSyntax(genResult.text)
+            Log.d(TAG, "simpleFlow existingChat rawLen=${genResult.text.length} finalLen=${finalResponse.length}")
 
             _streamingAssistantMessage.value = finalResponse
 
@@ -1142,7 +1770,7 @@ class ChatViewModel @Inject constructor(
         messages: List<JSONObject>,
         maxTokens: Int
     ): GenerationResult {
-        val jsonArray = JSONArray(messages)
+        Log.d(TAG, "generateWithToolCalls provider=$currentTextProviderType messages=${messages.size} maxTokens=$maxTokens")
         val resultBuilder = StringBuilder()
         val utf8Buffer = Utf8TokenBuffer()
         val nativeToolCalls = mutableListOf<Pair<String, String>>()
@@ -1151,7 +1779,22 @@ class ChatViewModel @Inject constructor(
         var lastRepCheckLen = 0
         var repetitionTrimIndex = -1
 
-        val generationFlow = LlmModelWorker.ggufGenerateMultiTurnStreaming(jsonArray.toString(), maxTokens)
+        val generationFlow = when (currentTextProviderType) {
+            ProviderType.GOOGLE_LOCAL -> {
+                val googleMessages = messages.map { json ->
+                    GoogleLocalMessage(
+                        role = json.optString("role", "user"),
+                        content = json.optString("content", "")
+                    )
+                }
+                LlmModelWorker.googleLocalGenerateStreaming(appContext, googleMessages)
+            }
+            ProviderType.GGUF -> {
+                val jsonArray = JSONArray(messages)
+                LlmModelWorker.ggufGenerateMultiTurnStreaming(jsonArray.toString(), maxTokens)
+            }
+            else -> throw IllegalStateException("No text generation model is active")
+        }
 
         generationFlow.collect { event ->
             when (event) {
@@ -1173,7 +1816,9 @@ class ChatViewModel @Inject constructor(
                         if (trimIdx >= 0) {
                             Log.w(TAG, "Repetition loop detected at ~$trimIdx chars, stopping generation")
                             repetitionTrimIndex = trimIdx
-                            LlmModelWorker.ggufStopGeneration()
+                            if (currentTextProviderType == ProviderType.GGUF) {
+                                LlmModelWorker.ggufStopGeneration()
+                            }
                         }
                     }
                 }
@@ -1184,6 +1829,7 @@ class ChatViewModel @Inject constructor(
                     _streamingAssistantMessage.value = resultBuilder.toString()
                     // Update context usage after generation completes
                     _contextUsagePercent.value = LlmModelWorker.getContextUsageGguf()
+                    Log.d(TAG, "generateWithToolCalls done rawLen=${resultBuilder.length}")
                 }
                 is GenerationEvent.Metrics -> { currentMetrics = event.metrics }
                 is GenerationEvent.Progress -> { /* progress tracked elsewhere */ }
@@ -1199,6 +1845,9 @@ class ChatViewModel @Inject constructor(
         }
 
         var result = resultBuilder.toString().trim()
+        if (result.isBlank()) {
+            Log.w(TAG, "generateWithToolCalls completed with blank result for provider=$currentTextProviderType")
+        }
 
         // Trim repetitive tail if detected during streaming
         if (repetitionTrimIndex in 1 until result.length) {
@@ -1232,6 +1881,10 @@ class ChatViewModel @Inject constructor(
         messages: List<JSONObject>,
         maxTokens: Int
     ): List<Pair<String, String>> {
+        if (currentTextProviderType == ProviderType.GOOGLE_LOCAL) {
+            reportError("Google Local пока не поддерживает OpenClaw tools. Для инструментов загрузите GGUF-модель.")
+            return emptyList()
+        }
         val toolCalls = mutableListOf<Pair<String, String>>()
         val textBuilder = StringBuilder()
         val jsonArray = JSONArray(messages)
@@ -1312,7 +1965,92 @@ class ChatViewModel @Inject constructor(
             }
         }
 
+        if (results.isEmpty()) {
+            tryParseInstructionalToolCall(text)?.let { results.add(it) }
+        }
+
         return results.takeIf { it.isNotEmpty() }
+    }
+
+    private fun tryParseInstructionalToolCall(content: String): Pair<String, String>? {
+        val cleaned = content
+            .replace("<|channel>thought", "", ignoreCase = true)
+            .replace("<channel|>", "", ignoreCase = true)
+            .replace("<turn|>", "", ignoreCase = true)
+            .trim()
+
+        val browserOpenRegex = Regex(
+            """call\s+the\s+[`"]?(browser|browse|browser_open_url)[`"]?\s+tool\s+with\s+the\s+argument\s+[`"]?([^`"\n]+?)[`"]?(?:[.!]|$)""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
+        browserOpenRegex.find(cleaned)?.let { match ->
+            val rawUrl = match.groupValues[2].trim()
+            val toolName = "browser_open_url"
+            val argsJson = JSONObject().apply {
+                put("tool_calls", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("name", toolName)
+                        put("arguments", JSONObject().put("url", rawUrl))
+                    })
+                })
+            }.toString()
+            return Pair(toolName, argsJson)
+        }
+
+        val webSearchRegex = Regex(
+            """call\s+the\s+[`"]?(web_search|search)[`"]?\s+tool\s+with\s+the\s+argument\s+[`"]?([^`"\n]+?)[`"]?(?:[.!]|$)""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
+        webSearchRegex.find(cleaned)?.let { match ->
+            val query = match.groupValues[2].trim()
+            val toolName = "web_search"
+            val argsJson = JSONObject().apply {
+                put("tool_calls", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("name", toolName)
+                        put("arguments", JSONObject().put("query", query))
+                    })
+                })
+            }.toString()
+            return Pair(toolName, argsJson)
+        }
+
+        val locationStatusRegex = Regex(
+            """call\s+the\s+[`"]?(get_location_status|location_status)[`"]?\s+tool(?:[.!]|$)""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
+        if (locationStatusRegex.containsMatchIn(cleaned)) {
+            val toolName = "get_location_status"
+            val argsJson = JSONObject().apply {
+                put("tool_calls", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("name", toolName)
+                        put("arguments", JSONObject())
+                    })
+                })
+            }.toString()
+            return Pair(toolName, argsJson)
+        }
+
+        val locationToggleRegex = Regex(
+            """call\s+the\s+[`"]?(set_location_enabled|toggle_location)[`"]?\s+tool.*?\b(true|false|on|off|enable|disable)\b""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
+        locationToggleRegex.find(cleaned)?.let { match ->
+            val desired = match.groupValues[2].lowercase() in setOf("true", "on", "enable")
+            val toolName = "set_location_enabled"
+            val argsJson = JSONObject().apply {
+                put("tool_calls", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("name", toolName)
+                        put("arguments", JSONObject().put("enabled", desired))
+                    })
+                })
+            }.toString()
+            return Pair(toolName, argsJson)
+        }
+
+        return null
     }
 
     /**
@@ -1324,14 +2062,39 @@ class ChatViewModel @Inject constructor(
 
         val hasActiveTools = PluginManager.hasEnabledTools()
             && PluginManager.isToolCallingModelLoaded.value
-        val thinkingDirective = if (_thinkingModeEnabled.value && !hasActiveTools) "/think" else "/no_think"
+        val thinkingDirective = if (_openClawEnabled.value && _thinkingModeEnabled.value && !hasActiveTools) "/think" else "/no_think"
+        val openClawProfile = if (_openClawEnabled.value) {
+            buildOpenClawProfilePrompt()
+        } else {
+            ""
+        }
 
         return buildString {
             append(thinkingDirective)
+            append("\nReturn only the final user-facing answer.")
+            append("\nDo not expose internal reasoning, hidden chain-of-thought, or channel tags.")
             if (basePrompt.isNotEmpty()) {
                 append("\n")
                 append(basePrompt)
             }
+            if (openClawProfile.isNotEmpty()) {
+                append("\n")
+                append(openClawProfile)
+            }
+        }
+    }
+
+    private fun buildOpenClawProfilePrompt(): String {
+        val settings = runCatching { openClawSettingsStore.read() }.getOrNull() ?: return ""
+        val skills = settings.selectedSkillIds.joinToString(", ").ifBlank { "browser, files, memory, travel_offline" }
+        val tools = settings.selectedApiToolIds.joinToString(", ").ifBlank { "web_search, browser" }
+        return buildString {
+            append("OpenClaw Local mode is active.")
+            append("\nPrefer persistent agent behavior, tool-aware reasoning, and resumable task context.")
+            append("\nEnabled skills: ")
+            append(skills)
+            append("\nAllowed tool families: ")
+            append(tools)
         }
     }
 
@@ -1362,10 +2125,13 @@ class ChatViewModel @Inject constructor(
                         JSONObject().put("role", "user").put("content", msg.content.content)
                     )
                     Role.Assistant -> {
+                        val sanitizedAssistantContent = stripReasoningArtifacts(msg.content.content)
                         when (msg.content.contentType) {
-                            ContentType.Text -> result.add(
-                                JSONObject().put("role", "assistant").put("content", msg.content.content)
-                            )
+                            ContentType.Text -> if (sanitizedAssistantContent.isNotBlank()) {
+                                result.add(
+                                    JSONObject().put("role", "assistant").put("content", sanitizedAssistantContent)
+                                )
+                            }
                             ContentType.PluginResult -> {
                                 msg.content.pluginResultData?.let { data ->
                                     result.add(JSONObject().put("role", "assistant").put("content",
@@ -1374,8 +2140,8 @@ class ChatViewModel @Inject constructor(
                                 }
                             }
                             else -> {
-                                if (msg.content.content.isNotBlank()) {
-                                    result.add(JSONObject().put("role", "assistant").put("content", msg.content.content))
+                                if (sanitizedAssistantContent.isNotBlank()) {
+                                    result.add(JSONObject().put("role", "assistant").put("content", sanitizedAssistantContent))
                                 }
                             }
                         }
@@ -1552,14 +2318,14 @@ class ChatViewModel @Inject constructor(
         return null
     }
 
-    /** Normalize tool name: "Web Scraping" в†’ "web_scraping" */
+    /** Normalize tool name: "Web Scraping" РІвЂ вЂ™ "web_scraping" */
     private fun normalizeToolName(toolName: String): String {
         return toolName.lowercase().replace(" ", "_").replace("-", "_")
     }
 
     /** Filter out tool call syntax and code blocks from generated text. */
     private fun filterToolCallSyntax(content: String): String {
-        var filtered = content
+        var filtered = stripReasoningArtifacts(content)
         filtered = filtered.replace(Regex("<tool_call>\\s*\\{.*?\\}\\s*</tool_call>", RegexOption.DOT_MATCHES_ALL), "")
         filtered = filtered.replace(Regex("```json\\s*\\{[^`]*```", RegexOption.DOT_MATCHES_ALL), "")
         filtered = filtered.replace(Regex("```\\s*\\{[^`]*```", RegexOption.DOT_MATCHES_ALL), "")
@@ -1567,6 +2333,23 @@ class ChatViewModel @Inject constructor(
         filtered = filtered.replace(Regex("\\{\\s*\"name\"\\s*:\\s*\"[^\"]+\"\\s*,\\s*\"arguments\"\\s*:\\s*\\{.*?\\}\\s*\\}", RegexOption.DOT_MATCHES_ALL), "")
         filtered = filtered.trim()
         filtered = filtered.replace(Regex("\\n{3,}"), "\n\n")
+        return filtered
+    }
+
+    private fun stripReasoningArtifacts(content: String): String {
+        var filtered = content
+        filtered = filtered.replace(
+            Regex("<think>(.*?)</think>|\\[THINK](.*?)\\[/THINK]|<reasoning>(.*?)</reasoning>", RegexOption.DOT_MATCHES_ALL),
+            ""
+        )
+        filtered = filtered.replace(
+            Regex("<\\|channel>thought\\s*(.*?)(?=<\\|channel>\\w+|<channel\\|>|<\\|end\\|>|$)", RegexOption.DOT_MATCHES_ALL),
+            ""
+        )
+        filtered = filtered.replace(Regex("<\\|channel>\\w+"), "")
+        filtered = filtered.replace("<channel|>", "", ignoreCase = true)
+        filtered = filtered.replace("<turn|>", "", ignoreCase = true)
+        filtered = filtered.replace("<|end|>", "", ignoreCase = true)
         return filtered
     }
 
@@ -1913,7 +2696,7 @@ class ChatViewModel @Inject constructor(
     fun stop() {
         if (TTSManager.isPlaying.value) { TTSManager.stopPlayback() }
 
-        // 1. Snapshot mutable state BEFORE cancellation nukes it via finallyв†’resetStreamingState
+        // 1. Snapshot mutable state BEFORE cancellation nukes it via finallyРІвЂ вЂ™resetStreamingState
         val snapshotChatId = _currentChatId.value
         val snapshotUserMsg = currentUserMessage
         val snapshotContent = _streamingAssistantMessage.value
@@ -1931,7 +2714,7 @@ class ChatViewModel @Inject constructor(
             ModelType.AUDIO_GENERATION -> stopTTS()
         }
 
-        // 3. Cancel the coroutine job (triggers finally в†’ resetStreamingState)
+        // 3. Cancel the coroutine job (triggers finally РІвЂ вЂ™ resetStreamingState)
         generationJob?.cancel()
         generationJob = null
 
@@ -1967,7 +2750,7 @@ class ChatViewModel @Inject constructor(
                 decodingMetrics = metrics
             )
             _messages.add(assistantMessage)
-            // New content was produced вЂ” safe to delete old message from DB
+            // New content was produced РІР‚вЂќ safe to delete old message from DB
             regenerationSnapshot?.let { old ->
                 regenerationSnapshot = null
                 viewModelScope.launch { chatManager.deleteMessage(old.msgId) }
@@ -1975,7 +2758,7 @@ class ChatViewModel @Inject constructor(
             // Persist new message to DB async
             viewModelScope.launch { chatManager.addMessage(chatId, assistantMessage) }
         } else if (regenerationSnapshot != null) {
-            // Regeneration cancelled with no content вЂ” restore old message
+            // Regeneration cancelled with no content РІР‚вЂќ restore old message
             restoreRegenerationSnapshot()
         } else if (userMsg != null && !wasUserAdded) {
             _messages.add(userMsg)
@@ -2097,7 +2880,7 @@ class ChatViewModel @Inject constructor(
         _showModelList.value = false
     }
 
-    // в”Ђв”Ђ Lifecycle в”Ђв”Ђ
+    // РІвЂќР‚РІвЂќР‚ Lifecycle РІвЂќР‚РІвЂќР‚
 
     override fun onCleared() {
         super.onCleared()
@@ -2105,11 +2888,11 @@ class ChatViewModel @Inject constructor(
         generationJob = null
     }
 
-    // в”Ђв”Ђ UTF-8 Token Buffer в”Ђв”Ђ
+    // РІвЂќР‚РІвЂќР‚ UTF-8 Token Buffer РІвЂќР‚РІвЂќР‚
 
     /**
      * Buffers incomplete UTF-8 byte sequences from streaming tokens.
-     * Some models emit tokens that split multi-byte characters (e.g. Turkish Еџ, emoji)
+     * Some models emit tokens that split multi-byte characters (e.g. Turkish Р•Сџ, emoji)
      * across multiple callbacks. This buffer holds trailing incomplete bytes until
      * the next token completes the character.
      */
@@ -2153,7 +2936,7 @@ class ChatViewModel @Inject constructor(
             var i = bytes.size - 1
             // Skip continuation bytes (10xxxxxx)
             while (i >= 0 && bytes[i].toInt() and 0xC0 == 0x80) i--
-            if (i < 0) return 0 // All continuation bytes вЂ” all incomplete
+            if (i < 0) return 0 // All continuation bytes РІР‚вЂќ all incomplete
 
             val leadByte = bytes[i].toInt() and 0xFF
             val expectedLen = when {

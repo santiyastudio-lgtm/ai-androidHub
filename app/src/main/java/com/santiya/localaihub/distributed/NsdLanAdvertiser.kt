@@ -26,6 +26,8 @@ class NsdLanAdvertiser(
             serviceName = snapshot.nodeId
             serviceType = NsdLanDiscoveryService.SERVICE_TYPE
             setPort(port)
+            setAttribute("httpPort", port.toString())
+            setAttribute("pairingRequired", "true")
             setAttribute("totalRamMb", snapshot.totalRamMb.toString())
             setAttribute("freeRamMb", snapshot.freeRamMb.toString())
             setAttribute("cpuCores", snapshot.cpuCores.toString())

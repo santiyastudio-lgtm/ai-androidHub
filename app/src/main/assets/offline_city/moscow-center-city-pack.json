@@ -1,0 +1,90 @@
+{
+  "id": "moscow-center-demo",
+  "name": "Moscow Center Demo",
+  "region": "Russia",
+  "description": "Built-in offline city pack for Moscow center.",
+  "bounds": {
+    "south": 55.744,
+    "west": 37.600,
+    "north": 55.765,
+    "east": 37.635
+  },
+  "tileSource": {
+    "id": "builtin-demo-map",
+    "displayName": "Built-in demo map",
+    "format": "builtin"
+  },
+  "places": [
+    {
+      "id": "cafe-pushkin",
+      "name": "Cafe Pushkin",
+      "category": "restaurant",
+      "address": "Tverskoy Blvd 26A",
+      "latitude": 55.7645,
+      "longitude": 37.6046,
+      "hours": "09:00-23:00"
+    },
+    {
+      "id": "bolshoi-theatre",
+      "name": "Bolshoi Theatre",
+      "category": "tourism",
+      "address": "Theatre Square 1",
+      "latitude": 55.7601,
+      "longitude": 37.6186
+    },
+    {
+      "id": "gum-food-hall",
+      "name": "GUM Food Hall",
+      "category": "food",
+      "address": "Red Square 3",
+      "latitude": 55.7547,
+      "longitude": 37.6212,
+      "hours": "10:00-22:00"
+    }
+  ],
+  "stops": [
+    {
+      "id": "stop-okhotny-ryad",
+      "name": "Okhotny Ryad",
+      "latitude": 55.7573,
+      "longitude": 37.6156,
+      "routes": ["M1", "M2"]
+    },
+    {
+      "id": "stop-pushkinskaya",
+      "name": "Pushkinskaya",
+      "latitude": 55.7659,
+      "longitude": 37.6045,
+      "routes": ["M3", "E10"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "route-m1",
+      "shortName": "M1",
+      "longName": "City Center Loop",
+      "stopIds": ["stop-okhotny-ryad", "stop-pushkinskaya"]
+    }
+  ],
+  "departures": [
+    {
+      "routeId": "route-m1",
+      "routeLabel": "M1",
+      "stopId": "stop-okhotny-ryad",
+      "stopName": "Okhotny Ryad",
+      "departureTime": "12:05:00",
+      "serviceDays": ["monday", "tuesday", "wednesday", "thursday", "friday"]
+    },
+    {
+      "routeId": "route-m1",
+      "routeLabel": "M1",
+      "stopId": "stop-pushkinskaya",
+      "stopName": "Pushkinskaya",
+      "departureTime": "12:12:00",
+      "serviceDays": ["monday", "tuesday", "wednesday", "thursday", "friday"]
+    }
+  ],
+  "sourceFiles": [
+    "moscow-center-city-pack.json"
+  ]
+}

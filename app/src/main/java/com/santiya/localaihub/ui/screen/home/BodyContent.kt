@@ -15,14 +15,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.santiya.localaihub.models.state.AppState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.santiya.localaihub.models.ModelType
 import com.santiya.localaihub.models.messages.ContentType
 import com.santiya.localaihub.models.messages.Role
+import com.santiya.localaihub.browser.BrowserToolState
 import com.santiya.localaihub.ui.components.lazyMarkdownItems
+import com.santiya.localaihub.ui.screen.offlinecity.OfflineCityAnswerCard
 import com.santiya.localaihub.ui.theme.Motion
 import com.santiya.localaihub.viewmodel.ChatViewModel
 import com.santiya.localaihub.viewmodel.LLMModelViewModel
+import com.santiya.localaihub.global.localizedText
 import com.santiya.localaihub.global.Standards
 import com.santiya.localaihub.viewmodel.StreamingState
 import com.santiya.localaihub.viewmodel.ChatUiState
@@ -33,10 +37,11 @@ import com.santiya.localaihub.viewmodel.ChatConfigState
 // в”Ђв”Ђ Pre-compiled regex (avoid allocation in composition) в”Ђв”Ђ
 
 internal val THINK_TAG_REGEX = Regex(
-    "<think>(.*?)</think>|\\[THINK](.*?)\\[/THINK]|<reasoning>(.*?)</reasoning>",
+    "<think>(.*?)</think>|\\[THINK](.*?)\\[/THINK]|<reasoning>(.*?)</reasoning>|<\\|channel>thought\\s*(.*?)(?=<\\|channel>\\w+|<channel\\|>|<\\|end\\|>|$)|<\\|think\\|>(.*?)(?:<\\|end\\|>|$)",
     RegexOption.DOT_MATCHES_ALL
 )
-private val THINK_OPEN_TAGS = listOf("<think>", "[THINK]", "<reasoning>")
+private val THINK_OPEN_TAGS = listOf("<think>", "[THINK]", "<reasoning>", "<|channel>thought", "<|think|>")
+private val CHANNEL_MARKER_REGEX = Regex("<\\|channel>\\w+|<channel\\|>|<turn\\|>|<\\|end\\|>")
 
 data class ParsedMessage(
     val thinkingContent: String?,
@@ -72,6 +77,14 @@ fun parseThinkingTags(content: String): ParsedMessage {
     )
 }
 
+internal fun normalizeAssistantDisplayText(content: String): String {
+    val withoutThinking = content.replace(THINK_TAG_REGEX, " ").trim()
+    return withoutThinking
+        .replace(CHANNEL_MARKER_REGEX, " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+}
+
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun BodyContent(
@@ -81,6 +94,9 @@ fun BodyContent(
     onStoreClick: () -> Unit,
     onFilesClick: () -> Unit,
     onLiveClick: () -> Unit,
+    onOfflineCityClick: () -> Unit,
+    onApiModelsClick: () -> Unit,
+    onBrowserClick: () -> Unit,
 ) {
     val messages = chatViewModel.messages
     val streaming by chatViewModel.streamingState.collectAsStateWithLifecycle()
@@ -88,14 +104,24 @@ fun BodyContent(
     val agent by chatViewModel.agentState.collectAsStateWithLifecycle()
     val rag by chatViewModel.ragState.collectAsStateWithLifecycle()
     val config by chatViewModel.chatConfigState.collectAsStateWithLifecycle()
+    val offlineCityAnswer by chatViewModel.offlineCityAnswer.collectAsStateWithLifecycle()
+    val browserState by BrowserToolState.state.collectAsStateWithLifecycle()
     val appState by com.santiya.localaihub.state.AppStateManager.appState.collectAsStateWithLifecycle()
     val ttsPlayingMsgId by chatViewModel.ttsPlayingMsgId.collectAsStateWithLifecycle()
     val ttsIsPlaying by chatViewModel.ttsIsPlaying.collectAsStateWithLifecycle()
     val ttsSynthesizing by chatViewModel.ttsSynthesizing.collectAsStateWithLifecycle()
     val ttsModelLoaded by chatViewModel.ttsModelLoaded.collectAsStateWithLifecycle()
-    val installedModels by llmModelViewModel.installedModels.collectAsStateWithLifecycle(emptyList())
-    val currentModelId by llmModelViewModel.currentModelID.collectAsStateWithLifecycle()
-    val currentModelName = installedModels.firstOrNull { it.id == currentModelId }?.modelName
+    val currentModelNameFromVm by llmModelViewModel.currentModelName.collectAsStateWithLifecycle()
+    val currentModelName = currentModelNameFromVm
+        ?: when (val state = appState) {
+            is AppState.ModelLoaded -> state.modelName
+            is AppState.LoadingModel -> state.modelName
+            is AppState.GeneratingText -> state.modelName
+            is AppState.GeneratingImage -> state.modelName
+            is AppState.GeneratingAudio -> state.modelName
+            is AppState.Error -> state.modelName
+            else -> null
+        }
 
     // Image blur setting вЂ” collected once, passed down to avoid per-message DataStore creation
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -132,6 +158,9 @@ fun BodyContent(
                 onStoreClick = onStoreClick,
                 onFilesClick = onFilesClick,
                 onLiveClick = onLiveClick,
+                onOfflineCityClick = onOfflineCityClick,
+                onApiModelsClick = onApiModelsClick,
+                onBrowserClick = onBrowserClick,
                 onShowModelPicker = { chatViewModel.showDynamicWindow() }
             )
         } else {
@@ -167,6 +196,41 @@ fun BodyContent(
                     contentPadding = PaddingValues(vertical = Standards.SpacingSm),
                     verticalArrangement = Arrangement.spacedBy(Standards.SpacingXs)
                 ) {
+                    offlineCityAnswer?.let { cityAnswer ->
+                        item(key = "offline-city-answer-map") {
+                            OfflineCityAnswerCard(
+                                answer = cityAnswer,
+                                modifier = Modifier.padding(horizontal = Standards.SpacingMd),
+                                onSuggestionClick = { suggestion -> chatViewModel.sendChat(suggestion) }
+                            )
+                        }
+                    }
+                    browserState.currentUrl?.let { currentUrl ->
+                        item(key = "embedded-browser-state") {
+                            ElevatedCard(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = Standards.SpacingMd)
+                                    .clickable { onBrowserClick() }
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(Standards.SpacingMd),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = localizedText("Встроенный браузер", "Embedded browser"),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = browserState.pageTitle ?: currentUrl,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     deduped.forEachIndexed { index, message ->
                         when (message.role) {
@@ -179,14 +243,15 @@ fun BodyContent(
                                 val isLastAssistant = index == lastAssistantIndex
                                 // Header: RAG, tool chain, thinking, image/plugin
                                 item(key = "${message.msgId}-header") {
-                                    AssistantMessageHeader(message, imageBlurEnabled)
+                                    AssistantMessageHeader(
+                                        message = message,
+                                        imageBlurEnabled = imageBlurEnabled,
+                                        showThinking = chatState.thinkingEnabled
+                                    )
                                 }
                                 // Markdown content вЂ” each element is a lazy item
                                 if (message.content.contentType == ContentType.Text) {
-                                    val raw = message.content.content
-                                    val parsedText = if (THINK_TAG_REGEX.containsMatchIn(raw)) {
-                                        raw.replace(THINK_TAG_REGEX, "").trim()
-                                    } else raw
+                                    val parsedText = normalizeAssistantDisplayText(message.content.content)
                                     if (parsedText.isNotEmpty()) {
                                         lazyMarkdownItems(
                                             text = parsedText,

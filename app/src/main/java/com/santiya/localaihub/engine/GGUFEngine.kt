@@ -2,10 +2,13 @@ package com.santiya.localaihub.engine
 
 import android.content.Context
 import android.util.Log
+import com.arm.aichat.InferenceEngine
 import com.dark.gguf_lib.GGMLEngine
 import com.dark.gguf_lib.toolcalling.GrammarMode
 import com.dark.gguf_lib.toolcalling.ToolCallingConfig
 import com.dark.gguf_lib.toolcalling.ToolDefinitionBuilder
+import com.santiya.localaihub.di.AppContainer
+import com.santiya.localaihub.distributedruntime.SourceDistributedRuntime
 import com.santiya.localaihub.global.DeviceTuner
 import com.santiya.localaihub.global.HardwareScanner
 import com.santiya.localaihub.models.engine_schema.DecodingMetrics
@@ -14,24 +17,46 @@ import com.santiya.localaihub.models.engine_schema.GgufLoadingParams
 import com.santiya.localaihub.models.engine_schema.toLocal
 import com.santiya.localaihub.models.table_schema.Model
 import com.santiya.localaihub.models.table_schema.ModelConfig
+import com.santiya.localaihub.worker.GgufRuntimeBackend
+import com.santiya.localaihub.worker.GgufRuntimeSupport
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import com.dark.gguf_lib.models.GenerationEvent as LibGenerationEvent
 
 class GGUFEngine {
+    private enum class ActiveBackend {
+        LEGACY,
+        SOURCE,
+    }
+
     private val engine = GGMLEngine()
+    private var sourceRuntime: SourceDistributedRuntime? = null
+    private var activeBackend = ActiveBackend.LEGACY
     private var currentModelId: String? = null
+    private var lastLoadErrorMessage: String? = null
 
     private var currentToolsJson: String? = null
     private var currentToolCallingConfig: ToolCallingConfig? = null
 
-    val isLoaded: Boolean get() = engine.isLoaded
+    val isLoaded: Boolean
+        get() = when (activeBackend) {
+            ActiveBackend.LEGACY -> engine.isLoaded
+            ActiveBackend.SOURCE -> sourceRuntime?.state?.value is InferenceEngine.State.ModelReady
+        }
+
+    fun getLastLoadErrorMessage(): String? = lastLoadErrorMessage
 
     suspend fun load(model: Model, config: ModelConfig?): Boolean = withContext(Dispatchers.IO) {
-        if (engine.isLoaded) unload()
+        unload()
+        lastLoadErrorMessage = null
 
         val schema = GgufEngineSchema.fromJson(
             config?.modelLoadingParams,
@@ -40,41 +65,59 @@ class GGUFEngine {
 
         val loading = schema.loadingParams
         val inference = schema.inferenceParams
+        val compatibility = GgufRuntimeSupport.inspect(File(model.modelPath))
 
-        val success = try {
-            engine.load(
-                path = model.modelPath,
-                contextSize = loading.ctxSize,
-                threads = loading.threads,
-                flashAttn = loading.flashAttn,
-                cacheTypeK = cacheTypeIntToString(loading.cacheTypeK),
-                cacheTypeV = cacheTypeIntToString(loading.cacheTypeV)
-            )
-        } catch (e: OutOfMemoryError) {
-            Log.e(TAG, "OOM loading model", e)
-            try { engine.unload() } catch (_: Throwable) {}
-            false
+        val success = when (compatibility.backend) {
+            GgufRuntimeBackend.SOURCE_AI_CHAT -> {
+                loadWithSourceRuntime(model, inference.systemPrompt)
+            }
+
+            GgufRuntimeBackend.LEGACY_GGUF_LIB -> {
+                try {
+                    activeBackend = ActiveBackend.LEGACY
+                    engine.load(
+                        path = model.modelPath,
+                        contextSize = loading.ctxSize,
+                        threads = loading.threads,
+                        flashAttn = loading.flashAttn,
+                        cacheTypeK = cacheTypeIntToString(loading.cacheTypeK),
+                        cacheTypeV = cacheTypeIntToString(loading.cacheTypeV)
+                    )
+                } catch (e: OutOfMemoryError) {
+                    Log.e(TAG, "OOM loading model", e)
+                    lastLoadErrorMessage = e.message ?: "Out of memory while loading GGUF model."
+                    try { engine.unload() } catch (_: Throwable) {}
+                    false
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Failed to load model with legacy GGUF runtime", e)
+                    lastLoadErrorMessage = e.message ?: "Legacy GGUF runtime failed to load the model."
+                    try { engine.unload() } catch (_: Throwable) {}
+                    false
+                }
+            }
         }
 
         if (success) {
-            engine.setSampling(
-                temperature = inference.temperature,
-                topK = inference.topK,
-                topP = inference.topP,
-                minP = inference.minP,
-                mirostat = inference.mirostat,
-                mirostatTau = inference.mirostatTau,
-                mirostatEta = inference.mirostatEta,
-                seed = inference.seed
-            )
-
             currentModelId = model.id
 
-            if (inference.systemPrompt.isNotEmpty()) {
-                engine.setSystemPrompt(inference.systemPrompt)
-            }
-            if (inference.chatTemplate.isNotEmpty()) {
-                engine.setChatTemplate(inference.chatTemplate)
+            if (activeBackend == ActiveBackend.LEGACY) {
+                engine.setSampling(
+                    temperature = inference.temperature,
+                    topK = inference.topK,
+                    topP = inference.topP,
+                    minP = inference.minP,
+                    mirostat = inference.mirostat,
+                    mirostatTau = inference.mirostatTau,
+                    mirostatEta = inference.mirostatEta,
+                    seed = inference.seed
+                )
+
+                if (inference.systemPrompt.isNotEmpty()) {
+                    engine.setSystemPrompt(inference.systemPrompt)
+                }
+                if (inference.chatTemplate.isNotEmpty()) {
+                    engine.setChatTemplate(inference.chatTemplate)
+                }
             }
         }
 
@@ -83,6 +126,8 @@ class GGUFEngine {
 
     suspend fun loadFromFd(fd: Int, config: ModelConfig? = null): Boolean = withContext(Dispatchers.IO) {
         if (engine.isLoaded) unload()
+        activeBackend = ActiveBackend.LEGACY
+        lastLoadErrorMessage = null
 
         val schema = GgufEngineSchema.fromJson(
             config?.modelLoadingParams,
@@ -103,6 +148,12 @@ class GGUFEngine {
             )
         } catch (e: OutOfMemoryError) {
             Log.e(TAG, "OOM loading model from FD", e)
+            lastLoadErrorMessage = e.message ?: "Out of memory while loading GGUF model from file descriptor."
+            try { engine.unload() } catch (_: Throwable) {}
+            false
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to load model from FD with legacy GGUF runtime", e)
+            lastLoadErrorMessage = e.message ?: "Legacy GGUF runtime failed to load the model from file descriptor."
             try { engine.unload() } catch (_: Throwable) {}
             false
         }
@@ -132,36 +183,70 @@ class GGUFEngine {
         success
     }
 
-    // в”Ђв”Ђ Generation в”Ђв”Ђ
-
     fun generateFlow(prompt: String, maxTokens: Int): Flow<GenerationEvent> =
-        engine.generateFlow(prompt, maxTokens).map { it.toLocal() }
+        when (activeBackend) {
+            ActiveBackend.LEGACY -> engine.generateFlow(prompt, maxTokens).map { it.toLocal() }
+            ActiveBackend.SOURCE -> flow {
+                val runtime = sourceRuntime
+                if (runtime == null) {
+                    emit(GenerationEvent.Error("GGUF runtime не инициализирован."))
+                    return@flow
+                }
+                try {
+                    runtime.generate(prompt, maxTokens).collect { token ->
+                        if (token.isNotEmpty()) emit(GenerationEvent.Token(token))
+                    }
+                    emit(GenerationEvent.Done)
+                } catch (error: Throwable) {
+                    emit(GenerationEvent.Error(error.message ?: "Ошибка генерации GGUF."))
+                }
+            }
+        }
 
     fun generateMultiTurnFlow(messagesJson: String, maxTokens: Int): Flow<GenerationEvent> =
-        engine.generateMultiTurnFlow(messagesJson, maxTokens).map { it.toLocal() }
+        when (activeBackend) {
+            ActiveBackend.LEGACY -> engine.generateMultiTurnFlow(messagesJson, maxTokens).map { it.toLocal() }
+            ActiveBackend.SOURCE -> generateFlow(flattenMessagesToPrompt(messagesJson), maxTokens)
+        }
 
     fun stopGeneration() {
-        engine.stopGeneration()
-    }
-
-    suspend fun unload() = withContext(Dispatchers.IO) {
-        if (engine.isLoaded) {
-            engine.unload()
-            currentModelId = null
-            currentToolsJson = null
-            currentToolCallingConfig = null
+        when (activeBackend) {
+            ActiveBackend.LEGACY -> engine.stopGeneration()
+            ActiveBackend.SOURCE -> sourceRuntime?.stopGeneration()
         }
     }
 
-    fun isModelLoaded(modelId: String): Boolean =
-        engine.isLoaded && currentModelId == modelId
+    suspend fun unload() = withContext(Dispatchers.IO) {
+        when (activeBackend) {
+            ActiveBackend.LEGACY -> {
+                if (engine.isLoaded) {
+                    engine.unload()
+                }
+            }
+
+            ActiveBackend.SOURCE -> {
+                runCatching { sourceRuntime?.unload() }
+                sourceRuntime = null
+            }
+        }
+
+        currentModelId = null
+        currentToolsJson = null
+        currentToolCallingConfig = null
+        lastLoadErrorMessage = null
+        activeBackend = ActiveBackend.LEGACY
+    }
+
+    fun isModelLoaded(modelId: String): Boolean = isLoaded && currentModelId == modelId
 
     fun getModelInfo(): String? =
-        if (engine.isLoaded) engine.getModelInfoJson() else null
-
-    // в”Ђв”Ђ Tool Calling в”Ђв”Ђ
+        when (activeBackend) {
+            ActiveBackend.LEGACY -> if (engine.isLoaded) engine.getModelInfoJson() else null
+            ActiveBackend.SOURCE -> runCatching { runBlocking { sourceRuntime?.getModelInfoJson() } }.getOrNull()
+        }
 
     fun isToolCallingSupported(): Boolean {
+        if (activeBackend == ActiveBackend.SOURCE) return false
         if (!engine.isLoaded) return false
         return try {
             engine.isToolCallingSupported()
@@ -170,21 +255,18 @@ class GGUFEngine {
         }
     }
 
-    /**
-     * Enable tool calling with actual ToolDefinitionBuilder objects (same-process direct call).
-     * This properly configures grammar constraints via the native engine.
-     */
     fun enableToolCallingDirect(
         toolDefs: List<ToolDefinitionBuilder>,
         config: ToolCallingConfig
     ): Boolean {
+        if (activeBackend == ActiveBackend.SOURCE) return false
         if (!engine.isLoaded) return false
 
         return try {
             val builtDefs = toolDefs.map { it.build() }
             engine.enableToolCalling(builtDefs, config)
             currentToolCallingConfig = config
-            currentToolsJson = null // invalidate JSON cache
+            currentToolsJson = null
             Log.d(TAG, "Tool calling enabled: ${builtDefs.size} tools, grammar=${config.grammarMode.name}, typed=${config.useTypedGrammar}")
             true
         } catch (e: Exception) {
@@ -193,15 +275,12 @@ class GGUFEngine {
         }
     }
 
-    /**
-     * Legacy JSON-based enableToolCalling (for AIDL compatibility).
-     * Falls back to setToolsJson only вЂ” grammar not enforced.
-     */
     fun enableToolCalling(
         toolsJson: String,
         grammarMode: Int = GrammarMode.LAZY.value,
         useTypedGrammar: Boolean = true
     ): Boolean {
+        if (activeBackend == ActiveBackend.SOURCE) return false
         if (!engine.isLoaded) return false
 
         return try {
@@ -215,6 +294,7 @@ class GGUFEngine {
     }
 
     fun setToolsJson(toolsJson: String): Boolean {
+        if (activeBackend == ActiveBackend.SOURCE) return false
         if (!engine.isLoaded) return false
         if (toolsJson == currentToolsJson) return true
 
@@ -226,8 +306,6 @@ class GGUFEngine {
             false
         }
     }
-
-    // в”Ђв”Ђ Persona Engine в”Ђв”Ђ
 
     fun updateSamplerParams(paramsJson: String): Boolean {
         if (!engine.isLoaded) return false
@@ -259,8 +337,6 @@ class GGUFEngine {
         } catch (_: Exception) { false }
     }
 
-    // в”Ђв”Ђ KV Cache State Persistence в”Ђв”Ђ
-
     fun getStateSize(): Long {
         if (!engine.isLoaded) return 0
         return try {
@@ -291,8 +367,6 @@ class GGUFEngine {
             } catch (_: Exception) { }
         }
     }
-
-    // в”Ђв”Ђ New Optimizations в”Ђв”Ђ
 
     fun setSpeculativeDecoding(enabled: Boolean, nDraft: Int = 4, ngramSize: Int = 4) {
         if (engine.isLoaded) {
@@ -339,16 +413,12 @@ class GGUFEngine {
         } catch (_: Exception) { 0f }
     }
 
-    // в”Ђв”Ђ Context Window Tracking в”Ђв”Ђ
-
     fun getContextInfo(prompt: String? = null): com.dark.gguf_lib.ContextInfo {
         if (!engine.isLoaded) return com.dark.gguf_lib.ContextInfo(0, 0, 0, -1, -1)
         return try {
             engine.getContextInfo(prompt)
         } catch (_: Exception) { com.dark.gguf_lib.ContextInfo(0, 0, 0, -1, -1) }
     }
-
-    // в”Ђв”Ђ Character Engine в”Ђв”Ђ
 
     private val characterEngine by lazy { com.dark.gguf_lib.CharacterEngine(engine) }
 
@@ -417,8 +487,6 @@ class GGUFEngine {
         } catch (_: Exception) { false }
     }
 
-    // в”Ђв”Ђ Activation Steering в”Ђв”Ђ
-
     fun calcVectors(prompt: String, onProgress: ((Float) -> Unit)? = null): FloatArray? {
         if (!engine.isLoaded) return null
         return try {
@@ -440,8 +508,6 @@ class GGUFEngine {
             true
         } catch (_: Exception) { false }
     }
-
-    // в”Ђв”Ђ VLM (Vision Language Model) в”Ђв”Ђ
 
     fun loadVlmProjector(path: String, threads: Int = 0): Boolean {
         if (!engine.isLoaded) return false
@@ -472,13 +538,51 @@ class GGUFEngine {
     ): Flow<GenerationEvent> =
         engine.generateVlmFlow(messagesJson, imageData, maxTokens).map { it.toLocal() }
 
+    private suspend fun loadWithSourceRuntime(model: Model, systemPrompt: String): Boolean {
+        return try {
+            val runtime = sourceRuntime ?: SourceDistributedRuntime.create(AppContainer.getAppContext()).also {
+                sourceRuntime = it
+            }
+            runtime.state.first { state ->
+                state !is InferenceEngine.State.Uninitialized &&
+                    state !is InferenceEngine.State.Initializing
+            }
+            runtime.loadModel(model.modelPath, systemPrompt.takeIf { it.isNotBlank() })
+            activeBackend = ActiveBackend.SOURCE
+            true
+        } catch (error: Throwable) {
+            Log.e(TAG, "Failed to load model with source runtime", error)
+            lastLoadErrorMessage = error.message ?: "Source GGUF runtime failed to load the model."
+            sourceRuntime = null
+            activeBackend = ActiveBackend.LEGACY
+            false
+        }
+    }
+
+    private fun flattenMessagesToPrompt(messagesJson: String): String {
+        return runCatching {
+            val array = JSONArray(messagesJson)
+            buildString {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val role = item.optString("role").ifBlank { "user" }
+                    val content = item.optString("content")
+                    if (content.isBlank()) continue
+                    append('[')
+                    append(role.uppercase())
+                    append("]\n")
+                    append(content)
+                    append("\n\n")
+                }
+            }.trim()
+        }.getOrElse { messagesJson }
+    }
+
     companion object {
         private const val TAG = "GGUFEngine"
 
         fun getRecommendedParams(context: Context): GgufLoadingParams {
             val profile = HardwareScanner.scan(context)
-            // Default to BALANCED вЂ” callers with access to coroutine scope should
-            // read performanceMode from DataStore themselves
             return DeviceTuner.tune(profile, modelSizeMB = 0, mode = com.santiya.localaihub.global.PerformanceMode.BALANCED)
         }
 
@@ -486,7 +590,6 @@ class GGUFEngine {
             return DeviceTuner.recommendContextSize(context, modelSizeMB, modelName)
         }
 
-        /** Convert old Int cache type to new String format */
         private fun cacheTypeIntToString(type: Int): String = when (type) {
             0 -> "f32"
             1 -> "f16"
@@ -500,8 +603,6 @@ class GGUFEngine {
     }
 }
 
-// в”Ђв”Ђ Local GenerationEvent (keeps .args for backward compat) в”Ђв”Ђ
-
 sealed class GenerationEvent {
     data class Token(val text: String) : GenerationEvent()
     data class ToolCall(val name: String, val args: String) : GenerationEvent()
@@ -511,7 +612,6 @@ sealed class GenerationEvent {
     data class Progress(val progress: Float) : GenerationEvent()
 }
 
-/** Map library GenerationEvent в†’ local GenerationEvent */
 private fun LibGenerationEvent.toLocal(): GenerationEvent = when (this) {
     is LibGenerationEvent.Token -> GenerationEvent.Token(text)
     is LibGenerationEvent.ToolCall -> GenerationEvent.ToolCall(name, argsJson)

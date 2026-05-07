@@ -1,0 +1,66 @@
+{
+  "id": "spb-center-demo",
+  "name": "Saint Petersburg Center Demo",
+  "region": "Russia",
+  "description": "Built-in offline city pack for Saint Petersburg center.",
+  "bounds": {
+    "south": 59.928,
+    "west": 30.300,
+    "north": 59.948,
+    "east": 30.335
+  },
+  "tileSource": {
+    "id": "builtin-demo-map",
+    "displayName": "Built-in demo map",
+    "format": "builtin"
+  },
+  "places": [
+    {
+      "id": "singer-cafe",
+      "name": "Singer Cafe",
+      "category": "cafe",
+      "address": "Nevsky Prospect 28",
+      "latitude": 59.9355,
+      "longitude": 30.3256,
+      "hours": "09:00-23:00"
+    },
+    {
+      "id": "kazan-cathedral",
+      "name": "Kazan Cathedral",
+      "category": "tourism",
+      "address": "Nevsky Prospect 25",
+      "latitude": 59.9343,
+      "longitude": 30.3241
+    }
+  ],
+  "stops": [
+    {
+      "id": "stop-nevsky",
+      "name": "Nevsky Prospect",
+      "latitude": 59.9351,
+      "longitude": 30.3259,
+      "routes": ["3", "7"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "route-3",
+      "shortName": "3",
+      "longName": "Nevsky Center",
+      "stopIds": ["stop-nevsky"]
+    }
+  ],
+  "departures": [
+    {
+      "routeId": "route-3",
+      "routeLabel": "3",
+      "stopId": "stop-nevsky",
+      "stopName": "Nevsky Prospect",
+      "departureTime": "12:08:00",
+      "serviceDays": ["monday", "tuesday", "wednesday", "thursday", "friday"]
+    }
+  ],
+  "sourceFiles": [
+    "spb-center-city-pack.json"
+  ]
+}

@@ -1,3 +1,0 @@
-# name,host,port,freeRamMb,totalRamMb,cpuCores,computeScore,acceleratorSummary
-# Remove the leading # to enable a peer entry.
-# Peer-1,192.168.0.21,17860,6144,8192,8,10.5,RTX-or-NPU-summary

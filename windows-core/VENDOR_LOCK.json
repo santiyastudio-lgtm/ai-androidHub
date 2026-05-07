@@ -1,0 +1,71 @@
+{
+  "generatedBy": "Codex",
+  "purpose": "Pinned upstream manifest for planned Windows runtime vendoring",
+  "entries": [
+    {
+      "name": "llama.cpp",
+      "repository": "ggml-org/llama.cpp",
+      "url": "https://github.com/ggml-org/llama.cpp",
+      "pinnedCommit": "1a03cf47f67be591699d1f0f7ca28e1ed6eb8c7e",
+      "role": [
+        "gguf_chat",
+        "embeddings"
+      ],
+      "status": "planned_vendor"
+    },
+    {
+      "name": "onnxruntime",
+      "repository": "microsoft/onnxruntime",
+      "url": "https://github.com/microsoft/onnxruntime",
+      "pinnedCommit": "b0b5de39eaab2ae24e2dc489ddff4cf0aaa8ccc4",
+      "role": [
+        "onnx_vision",
+        "onnx_detection",
+        "onnx_segmentation"
+      ],
+      "status": "planned_vendor"
+    },
+    {
+      "name": "onnxruntime-extensions",
+      "repository": "microsoft/onnxruntime-extensions",
+      "url": "https://github.com/microsoft/onnxruntime-extensions",
+      "pinnedCommit": "7e98997db942c9f4e1fc86dfcce246f3a0001b22",
+      "role": [
+        "onnx_image_utils",
+        "custom_ops"
+      ],
+      "status": "planned_vendor"
+    },
+    {
+      "name": "stable-diffusion.cpp",
+      "repository": "leejet/stable-diffusion.cpp",
+      "url": "https://github.com/leejet/stable-diffusion.cpp",
+      "pinnedCommit": "2bcff674806feb191c69ca50a4dc17386ea27551",
+      "role": [
+        "image_generation",
+        "image_tools"
+      ],
+      "status": "planned_vendor"
+    },
+    {
+      "name": "piper",
+      "repository": "rhasspy/piper",
+      "url": "https://github.com/rhasspy/piper",
+      "pinnedCommit": "dc984e9525663a922cdabf6e7e53ef6a5b924145",
+      "role": [
+        "tts"
+      ],
+      "status": "planned_vendor"
+    },
+    {
+      "name": "neuron-packet",
+      "repository": "local-repo",
+      "url": "local://ToolNeuron-re-write/neuron-packet",
+      "pinnedCommit": "99951df8a90752b67c995966d229b5fbe92eeca8",
+      "role": [
+        "rag_packet_compatibility"
+      ],
+      "status": "local_source"
+    }
+  ]
+}

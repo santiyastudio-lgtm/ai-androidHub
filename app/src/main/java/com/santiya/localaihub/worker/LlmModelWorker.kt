@@ -14,6 +14,10 @@ import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.santiya.googlelocalruntime.GoogleLocalGenerationEvent
+import com.santiya.googlelocalruntime.GoogleLocalMessage
+import com.santiya.googlelocalruntime.GoogleLocalModelDescriptor
+import com.santiya.googlelocalruntime.GoogleLocalRuntimeManager
 import com.santiya.localaihub.engine.GenerationEvent
 import com.santiya.localaihub.models.table_schema.Model
 import com.santiya.localaihub.models.table_schema.ModelConfig
@@ -69,8 +73,26 @@ object LlmModelWorker {
     private val _currentDiffusionModelId = MutableStateFlow<String?>(null)
     val currentDiffusionModelId: StateFlow<String?> = _currentDiffusionModelId.asStateFlow()
 
+    private val _isGoogleLocalModelLoaded = MutableStateFlow(false)
+    val isGoogleLocalModelLoaded: StateFlow<Boolean> = _isGoogleLocalModelLoaded.asStateFlow()
+
+    private val _currentGoogleLocalModelId = MutableStateFlow<String?>(null)
+    val currentGoogleLocalModelId: StateFlow<String?> = _currentGoogleLocalModelId.asStateFlow()
+
     fun setCurrentGgufModelId(id: String?) { _currentGgufModelId.value = id }
     fun setCurrentDiffusionModelId(id: String?) { _currentDiffusionModelId.value = id }
+    fun setCurrentGoogleLocalModelId(id: String?) { _currentGoogleLocalModelId.value = id }
+
+    @Volatile
+    private var googleLocalRuntimeManager: GoogleLocalRuntimeManager? = null
+
+    private fun getGoogleLocalRuntime(context: Context): GoogleLocalRuntimeManager {
+        val existing = googleLocalRuntimeManager
+        if (existing != null) return existing
+        return GoogleLocalRuntimeManager(context.applicationContext).also {
+            googleLocalRuntimeManager = it
+        }
+    }
 
 
     private val connection = object : ServiceConnection {
@@ -144,6 +166,8 @@ object LlmModelWorker {
             isBinding = false
             _isGgufModelLoaded.value = false
             _isDiffusionModelLoaded.value = false
+            _isGoogleLocalModelLoaded.value = false
+            _currentGoogleLocalModelId.value = null
         }
     }
 
@@ -319,6 +343,61 @@ object LlmModelWorker {
         _isGgufModelLoaded.value = false
         Log.i(TAG, "GGUF model unloaded")
     }
+
+    suspend fun loadGoogleLocalModel(
+        context: Context,
+        descriptor: GoogleLocalModelDescriptor,
+    ): Boolean {
+        return try {
+            val runtime = getGoogleLocalRuntime(context)
+            val result = runtime.load(descriptor)
+            val success = result.isSuccess
+            _isGoogleLocalModelLoaded.value = success
+            _currentGoogleLocalModelId.value = if (success) descriptor.modelId else null
+            if (success) {
+                Log.i(TAG, "Google Local model loaded: ${descriptor.modelName}")
+            } else {
+                Log.e(TAG, "Failed to load Google Local model: ${result.exceptionOrNull()?.message}")
+            }
+            success
+        } catch (e: Exception) {
+            _isGoogleLocalModelLoaded.value = false
+            _currentGoogleLocalModelId.value = null
+            Log.e(TAG, "Exception loading Google Local model", e)
+            false
+        }
+    }
+
+    fun unloadGoogleLocalModel() {
+        val runtime = googleLocalRuntimeManager ?: return
+        kotlinx.coroutines.runBlocking {
+            runCatching { runtime.unload() }
+        }
+        _isGoogleLocalModelLoaded.value = false
+        _currentGoogleLocalModelId.value = null
+        Log.i(TAG, "Google Local model unloaded")
+    }
+
+    fun googleLocalGenerateStreaming(
+        context: Context,
+        messages: List<GoogleLocalMessage>,
+    ): Flow<GenerationEvent> = callbackFlow {
+        val runtime = getGoogleLocalRuntime(context)
+        runtime.generateFlow(messages).collect { event ->
+            when (event) {
+                is GoogleLocalGenerationEvent.Token -> trySend(GenerationEvent.Token(event.text))
+                is GoogleLocalGenerationEvent.Done -> {
+                    trySend(GenerationEvent.Done)
+                    close()
+                }
+                is GoogleLocalGenerationEvent.Error -> {
+                    trySend(GenerationEvent.Error(event.message))
+                    close()
+                }
+            }
+        }
+        awaitClose { runtime.stopGeneration() }
+    }.flowOn(Dispatchers.IO)
 
     fun getGgufModelInfo(): String? {
         return _serviceFlow.value?.modelInfoGguf

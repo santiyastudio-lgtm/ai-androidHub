@@ -48,6 +48,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.santiya.localaihub.activity.RagActivity
 import com.santiya.localaihub.global.Standards
+import com.santiya.localaihub.global.localizedText
 import com.santiya.localaihub.models.ModelType
 import com.santiya.localaihub.ui.components.ActionButton
 import com.santiya.localaihub.ui.components.ActionProgressButton
@@ -56,6 +57,7 @@ import com.santiya.localaihub.ui.components.ModeToggleSwitch
 import com.santiya.localaihub.ui.components.PluginOverlayBottomSheet
 import com.santiya.localaihub.ui.icons.TnIcons
 import com.santiya.localaihub.viewmodel.ChatViewModel
+import com.santiya.localaihub.viewmodel.OpenClawMode
 import com.santiya.localaihub.viewmodel.LLMModelViewModel
 import com.santiya.localaihub.viewmodel.MemoryViewModel
 import com.santiya.localaihub.viewmodel.PluginViewModel
@@ -63,12 +65,6 @@ import com.santiya.localaihub.viewmodel.RagViewModel
 import kotlinx.coroutines.launch
 import java.io.BufferedReader
 import java.io.InputStreamReader
-
-private enum class ChatComposerMode {
-    NORMAL,
-    THINKING,
-    ORCHESTRA
-}
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -88,7 +84,6 @@ internal fun BottomBar(
     var showModelRequiredHint by remember { mutableStateOf(false) }
     var imageAttachments by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var fileAttachments by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    var chatMode by remember { mutableStateOf(ChatComposerMode.NORMAL) }
 
     val photoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 3)
@@ -106,11 +101,10 @@ internal fun BottomBar(
     }
 
     val currentModelID by llmModelViewModel.currentModelID.collectAsStateWithLifecycle()
-    val isModelLoaded = currentModelID.isNotBlank()
-
     val chatState by chatViewModel.chatUiState.collectAsStateWithLifecycle()
     val isTextModelLoaded by chatViewModel.isTextModelLoaded.collectAsStateWithLifecycle()
     val isImageModelLoaded by chatViewModel.isImageModelLoaded.collectAsStateWithLifecycle()
+    val isModelLoaded = currentModelID.isNotBlank() || isTextModelLoaded
 
     val loadedRags by ragViewModel.loadedRags.collectAsStateWithLifecycle()
     val isRagEnabledForChat by ragViewModel.isRagEnabledForChat.collectAsStateWithLifecycle()
@@ -155,12 +149,8 @@ internal fun BottomBar(
         onRefreshStats = { memoryViewModel.refreshStats() }
     )
 
-    fun selectChatMode(mode: ChatComposerMode) {
-        chatMode = mode
-        val shouldThink = mode != ChatComposerMode.NORMAL
-        if (isTextModelLoaded && chatState.thinkingEnabled != shouldThink) {
-            chatViewModel.toggleThinkingMode()
-        }
+    fun selectChatMode(mode: OpenClawMode) {
+        chatViewModel.setOpenClawMode(mode)
     }
 
     fun openAiPanelWithHint() {
@@ -179,19 +169,18 @@ internal fun BottomBar(
         val fileSections = fileAttachments.mapNotNull { uri ->
             readTextAttachment(context, uri)?.let { text ->
                 val label = resolveAttachmentLabel(context, uri)
-                "Файл: $label\n$text"
+                "${localizedText(context, "\u0424\u0430\u0439\u043b", "File")}: $label\n$text"
             }
         }
         val promptCore = input.trim().ifBlank {
-            if (imageAttachments.isNotEmpty()) "Опиши, что изображено на фото." else ""
-        }
-        val withModePrefix = when (chatMode) {
-            ChatComposerMode.NORMAL -> promptCore
-            ChatComposerMode.THINKING -> "Режим размышления.\n$promptCore".trim()
-            ChatComposerMode.ORCHESTRA -> "Режим оркестра. Разбей задачу на роли и дай единый согласованный ответ.\n$promptCore".trim()
+            if (imageAttachments.isNotEmpty()) {
+                localizedText(context, "\u041e\u043f\u0438\u0448\u0438, \u0447\u0442\u043e \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u043e \u043d\u0430 \u0444\u043e\u0442\u043e.", "Describe what is shown in the image.")
+            } else {
+                ""
+            }
         }
         return buildString {
-            append(withModePrefix)
+            append(promptCore)
             if (fileSections.isNotEmpty()) {
                 if (isNotBlank()) append("\n\n")
                 append(fileSections.joinToString("\n\n"))
@@ -216,7 +205,7 @@ internal fun BottomBar(
                     val imageBytes = imageAttachments.mapNotNull { uri -> readBinaryAttachment(context, uri) }
                     if (imageBytes.isNotEmpty()) {
                         chatViewModel.sendChatWithImages(
-                            prompt.ifBlank { "Опиши, что изображено на фото." },
+                            prompt.ifBlank { "Р В Р’В Р РЋРІР‚С”Р В Р’В Р РЋРІР‚вЂќР В Р’В Р РЋРІР‚ВР В Р Р‹Р Р†РІР‚С™Р’В¬Р В Р’В Р РЋРІР‚В, Р В Р Р‹Р Р†Р вЂљР Р‹Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р РЋРІР‚Сћ Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В·Р В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В±Р В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В°Р В Р’В Р вЂ™Р’В¶Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р’В Р РЋРІР‚Сћ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В° Р В Р Р‹Р Р†Р вЂљРЎвЂєР В Р’В Р РЋРІР‚СћР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р РЋРІР‚Сћ." },
                             imageBytes
                         )
                         clearComposer()
@@ -272,7 +261,7 @@ internal fun BottomBar(
                     .padding(top = Standards.SpacingSm, bottom = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(Standards.SpacingSm)
             ) {
-                if (showModelRequiredHint || currentModelID.isBlank()) {
+                if (showModelRequiredHint || !isModelLoaded) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -291,8 +280,7 @@ internal fun BottomBar(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "Выберите AI-модель в верхней AI-панели перед запуском.",
-                            style = MaterialTheme.typography.bodySmall,
+                            text = localizedText("\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 AI-\u043c\u043e\u0434\u0435\u043b\u044c \u0432 \u0432\u0435\u0440\u0445\u043d\u0435\u0439 AI-\u043f\u0430\u043d\u0435\u043b\u0438 \u043f\u0435\u0440\u0435\u0434 \u0437\u0430\u043f\u0443\u0441\u043a\u043e\u043c.", "Pick an AI model from the top AI panel before sending."),
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
                     }
@@ -341,6 +329,59 @@ internal fun BottomBar(
                             .padding(horizontal = Standards.SpacingMd, vertical = Standards.SpacingSm),
                         verticalArrangement = Arrangement.spacedBy(Standards.SpacingSm)
                     ) {
+                        val textModeEnabled = chatState.generationType == ModelType.TEXT_GENERATION
+                        val openClawActive = textModeEnabled && chatState.openClawEnabled
+                        val orchestraModeEnabled = openClawActive && toolCallingEnabled && isToolCallingModelLoaded
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(Standards.SpacingXs),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            ComposerModeChip(
+                                label = localizedText("\u041e\u0431\u044b\u0447\u043d\u044b\u0439", "Normal"),
+                                selected = openClawActive && chatState.openClawMode == OpenClawMode.NORMAL,
+                                enabled = openClawActive,
+                                onClick = { selectChatMode(OpenClawMode.NORMAL) }
+                            )
+                            ComposerModeChip(
+                                label = localizedText("\u0414\u0443\u043c\u0430\u044e\u0449\u0438\u0439", "Thinking"),
+                                selected = openClawActive && chatState.openClawMode == OpenClawMode.THINKING,
+                                enabled = openClawActive,
+                                onClick = { selectChatMode(OpenClawMode.THINKING) }
+                            )
+                            ComposerModeChip(
+                                label = localizedText("\u041e\u0440\u043a\u0435\u0441\u0442\u0440", "Orchestra"),
+                                selected = openClawActive && chatState.openClawMode == OpenClawMode.ORCHESTRA,
+                                enabled = orchestraModeEnabled,
+                                onClick = { selectChatMode(OpenClawMode.ORCHESTRA) }
+                            )
+                        }
+                        if (textModeEnabled && !openClawActive) {
+                            Text(
+                                text = localizedText(
+                                    "Включите кнопку OpenClaw внизу, если хотите отправлять сообщение через локального агента, а не через обычный чат.",
+                                    "Enable the OpenClaw button below to send through the local agent instead of ordinary chat."
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        } else if (textModeEnabled && !orchestraModeEnabled) {
+                            Text(
+                                text = localizedText(
+                                    "Оркестр включится, когда будет загружена локальная GGUF-модель с поддержкой инструментов и активированы локальные инструменты.",
+                                    "Orchestra becomes available after a local GGUF tool-calling model is loaded and local tools are enabled."
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+
                         if (imageAttachments.isNotEmpty() || fileAttachments.isNotEmpty()) {
                             Row(
                                 modifier = Modifier
@@ -379,9 +420,18 @@ internal fun BottomBar(
                                 placeholder = {
                                     Text(
                                         text = when (chatState.generationType) {
-                                            ModelType.TEXT_GENERATION -> "Напишите запрос, добавьте фото или файл..."
-                                            ModelType.IMAGE_GENERATION -> "Опишите изображение..."
-                                            ModelType.AUDIO_GENERATION -> "Напишите запрос..."
+                                            ModelType.TEXT_GENERATION -> localizedText(
+                                                "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0437\u0430\u043f\u0440\u043e\u0441, \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u0444\u043e\u0442\u043e \u0438\u043b\u0438 \u0444\u0430\u0439\u043b...",
+                                                "Write a prompt, add an image or file..."
+                                            )
+                                            ModelType.IMAGE_GENERATION -> localizedText(
+                                                "\u041e\u043f\u0438\u0448\u0438\u0442\u0435 \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435...",
+                                                "Describe the image..."
+                                            )
+                                            ModelType.AUDIO_GENERATION -> localizedText(
+                                                "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0437\u0430\u043f\u0440\u043e\u0441...",
+                                                "Write a prompt..."
+                                            )
                                         }
                                     )
                                 },
@@ -459,30 +509,19 @@ internal fun BottomBar(
                                 onClick = { showMoreOptions = !showMoreOptions }
                             )
 
+                            ComposerIconAction(
+                                icon = TnIcons.BrainCircuit,
+                                selected = chatState.openClawEnabled,
+                                enabled = chatState.generationType == ModelType.TEXT_GENERATION,
+                                onClick = { chatViewModel.toggleOpenClawEnabled() }
+                            )
+
                             if (toolCallingEnabled) {
                                 ComposerIconAction(
                                     icon = TnIcons.World,
                                     selected = isWebSearchEnabled,
                                     enabled = isToolCallingModelLoaded,
                                     onClick = { pluginViewModel.toggleWebSearch(!isWebSearchEnabled) }
-                                )
-                            }
-
-                            if (isTextModelLoaded) {
-                                ComposerModeChip(
-                                    label = "Обычный",
-                                    selected = chatMode == ChatComposerMode.NORMAL,
-                                    onClick = { selectChatMode(ChatComposerMode.NORMAL) }
-                                )
-                                ComposerModeChip(
-                                    label = "Размышление",
-                                    selected = chatMode == ChatComposerMode.THINKING,
-                                    onClick = { selectChatMode(ChatComposerMode.THINKING) }
-                                )
-                                ComposerModeChip(
-                                    label = "Оркестр",
-                                    selected = chatMode == ChatComposerMode.ORCHESTRA,
-                                    onClick = { selectChatMode(ChatComposerMode.ORCHESTRA) }
                                 )
                             }
                         }
@@ -528,10 +567,12 @@ private fun ComposerIconAction(
 private fun ComposerModeChip(
     label: String,
     selected: Boolean,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     Surface(
         onClick = onClick,
+        enabled = enabled,
         shape = RoundedCornerShape(Standards.RadiusFull),
         color = if (selected) {
             MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
@@ -542,7 +583,11 @@ private fun ComposerModeChip(
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = when {
+                !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                selected -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
         )
     }
@@ -597,8 +642,8 @@ private fun resolveAttachmentLabel(context: Context, uri: Uri): String {
                 }
             }
         }
-        uri.lastPathSegment?.substringAfterLast('/') ?: "Файл"
-    }.getOrDefault("Файл")
+        uri.lastPathSegment?.substringAfterLast('/') ?: localizedText(context, "\u0424\u0430\u0439\u043b", "File")
+    }.getOrDefault(localizedText(context, "\u0424\u0430\u0439\u043b", "File"))
 }
 
 private fun readBinaryAttachment(context: Context, uri: Uri): ByteArray? {

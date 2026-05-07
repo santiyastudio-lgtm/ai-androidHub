@@ -24,6 +24,15 @@ class LocalHttpApiController {
         return token
     }
 
+    fun updateState(enabled: Boolean, bindAddress: String, port: Int?) {
+        state = HttpApiState(
+            enabled = enabled,
+            bindAddress = bindAddress,
+            port = port,
+            requiresToken = true
+        )
+    }
+
     fun disabledReason(): String =
         "Local HTTP API is disabled by default. Enable it from the developer screen, bind only to 127.0.0.1, and require the generated token for every request."
 

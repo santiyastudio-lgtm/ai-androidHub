@@ -10,6 +10,7 @@ plugins {
 }
 
 val localPropertiesFile = rootProject.file("local.properties")
+val projectDebugKeystore = rootProject.file("keystore/legacy-debug.keystore")
 
 android {
     namespace = "com.santiya.localaihub"
@@ -20,15 +21,31 @@ android {
         applicationId = "com.santiya.localaihub"
         minSdk = 29
         targetSdk = 36
-        versionCode = 30
-        versionName = "2.0.3"
+        versionCode = 32
+        versionName = "1"
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
         buildConfigField("String", "ALIAS", getProperty("ALIAS"))
     }
 
+    signingConfigs {
+        create("projectDebug") {
+            if (projectDebugKeystore.exists()) {
+                storeFile = projectDebugKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (projectDebugKeystore.exists()) {
+                signingConfig = signingConfigs.getByName("projectDebug")
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -128,6 +145,8 @@ dependencies {
     implementation(project(":system_encryptor"))
     implementation(project(":file_ops"))
     implementation(project(":ums"))
+    implementation(project(":distributed-gguf-runtime"))
+    implementation(project(":google-local-runtime"))
     implementation(project(":santiya-localai-sdk"))
     //implementation(project(":character-engine"))
 

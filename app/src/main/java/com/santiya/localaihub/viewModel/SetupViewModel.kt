@@ -10,13 +10,19 @@ import com.santiya.localaihub.data.AppSettingsDataStore
 import com.santiya.localaihub.data.SetupDataStore
 import com.santiya.localaihub.data.VaultManager
 import com.santiya.localaihub.di.AppContainer
+import com.santiya.localaihub.global.DeviceTuner
+import com.santiya.localaihub.models.engine_schema.GgufEngineSchema
 import com.santiya.localaihub.global.HardwareScanner
 import com.santiya.localaihub.models.data.HuggingFaceModel
 import com.santiya.localaihub.models.data.ModelType
 import com.santiya.localaihub.models.enums.ProviderType
 import com.santiya.localaihub.global.PerformanceMode
+import com.santiya.localaihub.hub.OpenClawCatalog
+import com.santiya.localaihub.models.table_schema.Model
+import com.santiya.localaihub.models.table_schema.ModelConfig
 import com.santiya.localaihub.repo.ModelStoreRepository
 import com.santiya.localaihub.service.ModelDownloadService
+import com.santiya.localaihub.storage.SharedModelLibrary
 import com.santiya.localaihub.worker.SystemBackupManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -65,16 +71,16 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
     // ==================== Setup Model Definitions ====================
 
     private val textModel = HuggingFaceModel(
-        id = "lfm2-350m",
-        name = "LFM2 350M",
-        description = "Compact text generation model by LiquidAI",
-        fileUri = "LiquidAI/LFM2-350M-GGUF/resolve/main/LFM2-350M-Q4_K_M-hip-optimized.gguf",
-        approximateSize = "200 MB",
+        id = OpenClawCatalog.RECOMMENDED_MODEL_ID,
+        name = "Gemma 4 E2B Uncensored Aggressive Q4_K_P",
+        description = "Primary recommended OpenClaw Local model.",
+        fileUri = "${OpenClawCatalog.RECOMMENDED_REPO}/resolve/main/${OpenClawCatalog.RECOMMENDED_MODEL_FILE}",
+        approximateSize = "3.3 GB",
         modelType = ModelType.GGUF,
         isZip = false,
-        tags = listOf("GGUF", "Q4_K_M"),
+        tags = listOf("GGUF", "Q4_K_P", "Uncensored"),
         requiresNPU = false,
-        repositoryUrl = "LiquidAI/LFM2-350M-GGUF"
+        repositoryUrl = OpenClawCatalog.RECOMMENDED_REPO
     )
 
     private val ttsModel = HuggingFaceModel(
@@ -137,6 +143,7 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
 
         // Resume active setup downloads if any
         if (VaultManager.isReady.value) {
+            recoverSharedModels()
             resumeActiveDownloads()
             watchModelInstallations()
         }
@@ -145,6 +152,7 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             VaultManager.isReady.collect { ready ->
                 if (ready) {
+                    recoverSharedModels()
                     resumeActiveDownloads()
                     watchModelInstallations()
                 }
@@ -170,7 +178,9 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
             modelRepository.getAllModels().collect { models ->
                 if (_selectedOption.value != null && _selectedOption.value != SetupOption.POWER_MODE && !_showPerformancePicker.value && !_setupComplete.value) {
                     val hasTextOrImage = models.any {
-                        it.providerType == ProviderType.GGUF || it.providerType == ProviderType.DIFFUSION
+                        it.providerType == ProviderType.GGUF ||
+                            it.providerType == ProviderType.GOOGLE_LOCAL ||
+                            it.providerType == ProviderType.DIFFUSION
                     }
                     if (hasTextOrImage) {
                         _showPerformancePicker.value = true
@@ -198,6 +208,58 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
                 _primaryModelId.value = imageModelId
             }
         }
+    }
+
+    private fun recoverSharedModels() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val repository = modelRepository
+                SharedModelLibrary.scanManagedGgufModels(getApplication()).forEach { shared ->
+                    val existing = repository.getModelById(shared.model.id)
+                    if (existing == null) {
+                        repository.insertModel(shared.model)
+                        repository.insertConfig(buildGgufConfig(shared.model))
+                    } else if (existing.modelPath != shared.model.modelPath ||
+                        existing.providerType != ProviderType.GGUF ||
+                        !existing.isActive
+                    ) {
+                        repository.updateModel(
+                            existing.copy(
+                                modelName = shared.model.modelName,
+                                modelPath = shared.model.modelPath,
+                                pathType = shared.model.pathType,
+                                providerType = ProviderType.GGUF,
+                                fileSize = shared.model.fileSize,
+                                isActive = true
+                            )
+                        )
+                        if (repository.getConfigByModelId(shared.model.id) == null) {
+                            repository.insertConfig(buildGgufConfig(shared.model))
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Shared model recovery failed", e)
+            }
+        }
+    }
+
+    private suspend fun buildGgufConfig(model: Model): ModelConfig {
+        val tuningEnabled = appSettingsDataStore.hardwareTuningEnabled.firstOrNull() ?: true
+        val loadingParams = if (tuningEnabled) {
+            val perfMode = appSettingsDataStore.performanceMode.firstOrNull() ?: PerformanceMode.BALANCED
+            val modelSizeMB = ((model.fileSize ?: 0L) / (1024 * 1024)).toInt()
+            val profile = HardwareScanner.scan(getApplication())
+            DeviceTuner.tune(profile, modelSizeMB, model.modelName, perfMode)
+        } else {
+            com.santiya.localaihub.models.engine_schema.GgufLoadingParams()
+        }
+        val schema = GgufEngineSchema(loadingParams = loadingParams)
+        return ModelConfig(
+            modelId = model.id,
+            modelLoadingParams = schema.toLoadingJson(),
+            modelInferenceParams = schema.toInferenceJson()
+        )
     }
 
     // ==================== Actions ====================

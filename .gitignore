@@ -42,3 +42,10 @@ ISSUES_TRACKER.txt
 /windows-hub/build/
 /windows-hub/dist/
 hs_err_pid*.log
+/.gradle-user/
+**/build/
+**/intermediates/
+**/tmp/
+/keystore/
+/windows-hub/build-log.txt
+/windows-hub/build-running-log.txt

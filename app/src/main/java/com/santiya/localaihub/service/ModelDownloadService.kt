@@ -22,9 +22,11 @@ import com.santiya.localaihub.models.enums.ProviderType
 import com.santiya.localaihub.models.table_schema.Model
 import com.santiya.localaihub.models.table_schema.ModelConfig
 import com.santiya.localaihub.repo.ModelStoreRepository
+import com.santiya.localaihub.storage.SharedModelLibrary
 import com.santiya.localaihub.worker.DiffusionBackendSelector
 import com.santiya.localaihub.worker.DiffusionConfig
 import com.santiya.localaihub.worker.DiffusionInferenceParams
+import com.santiya.localaihub.worker.GgufRuntimeSupport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,6 +39,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ConcurrentHashMap
@@ -124,11 +127,11 @@ class ModelDownloadService : Service() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     ServiceCompat.startForeground(
                         this@ModelDownloadService, NOTIFICATION_ID,
-                        createNotification(modelName, 0f),
+                        createNotification(modelName, 0f, statusText = "0%"),
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
                     )
                 } else {
-                    startForeground(NOTIFICATION_ID, createNotification(modelName, 0f))
+                    startForeground(NOTIFICATION_ID, createNotification(modelName, 0f, statusText = "0%"))
                 }
                 startDownload(
                     modelId,
@@ -166,6 +169,7 @@ class ModelDownloadService : Service() {
             return
         }
         downloadJobs[modelId]?.cancel()
+        cleanupStaleDownloadArtifacts(modelId)
 
         val notificationId = notificationIdCounter.incrementAndGet()
         val job = serviceScope.launch {
@@ -175,14 +179,11 @@ class ModelDownloadService : Service() {
                 updateDownloadState(modelId, DownloadState.Downloading(modelId, 0f, 0, 0))
 
                 val tempDir = AppPaths.tempDownloads(applicationContext, modelId)
-                if (tempDir.exists()) {
-                    tempDir.deleteRecursively()
-                }
                 tempDir.mkdirs()
 
                 // Legacy Supertonic TTS downloads files directly, other runtimes use resolved assets
                 if (modelType != "TTS") {
-                    tempFile = File(tempDir, "${modelId}_${System.currentTimeMillis()}.tmp")
+                    tempFile = File(tempDir, buildPartialFileName(modelId, fileUrl))
                     downloadFile(fileUrl, tempFile, modelId, modelName, notificationId)
                 }
 
@@ -200,6 +201,9 @@ class ModelDownloadService : Service() {
                             modelDir.mkdirs()
 
                             extractTempDir = File(tempDir, "${modelId}_extract")
+                            if (extractTempDir.exists()) {
+                                extractTempDir.deleteRecursively()
+                            }
                             extractTempDir.mkdirs()
 
                             updateDownloadState(modelId, DownloadState.Extracting(modelId))
@@ -223,9 +227,15 @@ class ModelDownloadService : Service() {
                         updateNotification(modelName, 0f, notificationId, isProcessing = true)
 
                         insertModelToDatabase(
-                            modelId = modelId,
-                            modelName = modelName,
-                            modelPath = modelDir.absolutePath,
+                            model = Model(
+                                id = modelId,
+                                modelName = modelName,
+                                modelPath = modelDir.absolutePath,
+                                pathType = PathType.DIRECTORY,
+                                providerType = ProviderType.DIFFUSION,
+                                fileSize = modelDir.walkTopDown().sumOf { it.length() },
+                                isActive = true
+                            ),
                             modelType = modelType,
                             runOnCpu = runOnCpu,
                             textEmbeddingSize = textEmbeddingSize
@@ -233,23 +243,25 @@ class ModelDownloadService : Service() {
                     }
 
                     "GGUF" -> {
-                        AppPaths.models(applicationContext).mkdirs()
-
-                        val targetFile = AppPaths.modelFile(applicationContext, modelId)
-
-                        if (targetFile.exists()) {
-                            targetFile.delete()
-                        }
-
-                        tempFile?.copyTo(targetFile, overwrite = true)
+                        val installedModel = SharedModelLibrary.installManagedGgufFromFile(
+                            context = applicationContext,
+                            sourceFile = tempFile ?: error("Missing GGUF temp file"),
+                            model = Model(
+                                id = modelId,
+                                modelName = modelName,
+                                modelPath = "",
+                                pathType = PathType.FILE,
+                                providerType = ProviderType.GGUF,
+                                fileSize = tempFile?.length(),
+                                isActive = true
+                            )
+                        )
 
                         updateDownloadState(modelId, DownloadState.Processing(modelId))
                         updateNotification(modelName, 0f, notificationId, isProcessing = true)
 
                         insertModelToDatabase(
-                            modelId = modelId,
-                            modelName = modelName,
-                            modelPath = targetFile.absolutePath,
+                            model = installedModel,
                             modelType = modelType,
                             runOnCpu = false,
                             textEmbeddingSize = 0
@@ -270,9 +282,15 @@ class ModelDownloadService : Service() {
                         downloadTTSModelFiles(ttsModelDir, modelId, modelName, notificationId)
 
                         insertModelToDatabase(
-                            modelId = modelId,
-                            modelName = modelName,
-                            modelPath = ttsModelDir.absolutePath,
+                            model = Model(
+                                id = modelId,
+                                modelName = modelName,
+                                modelPath = ttsModelDir.absolutePath,
+                                pathType = PathType.DIRECTORY,
+                                providerType = ProviderType.TTS,
+                                fileSize = ttsModelDir.walkTopDown().sumOf { it.length() },
+                                isActive = true
+                            ),
                             modelType = modelType,
                             runOnCpu = true,
                             textEmbeddingSize = 0
@@ -292,6 +310,9 @@ class ModelDownloadService : Service() {
 
                         if (isZip) {
                             extractTempDir = File(tempDir, "${modelId}_extract")
+                            if (extractTempDir.exists()) {
+                                extractTempDir.deleteRecursively()
+                            }
                             extractTempDir.mkdirs()
 
                             updateDownloadState(modelId, DownloadState.Extracting(modelId))
@@ -320,17 +341,34 @@ class ModelDownloadService : Service() {
                         updateDownloadState(modelId, DownloadState.Processing(modelId))
                         updateNotification(modelName, 0f, notificationId, isProcessing = true)
 
+                        val storedPath = when {
+                            isZip -> targetDir.absolutePath
+                            modelType == "ONNX" -> File(
+                                targetDir,
+                                fileUrl.substringAfterLast('/').substringBefore('?').ifBlank { modelId }
+                            ).absolutePath
+                            else -> targetDir.absolutePath
+                        }
+                        val storedFile = File(storedPath)
+
                         insertModelToDatabase(
-                            modelId = modelId,
-                            modelName = modelName,
-                            modelPath = when {
-                                isZip -> targetDir.absolutePath
-                                modelType == "ONNX" -> File(
-                                    targetDir,
-                                    fileUrl.substringAfterLast('/').substringBefore('?').ifBlank { modelId }
-                                ).absolutePath
-                                else -> targetDir.absolutePath
-                            },
+                            model = Model(
+                                id = modelId,
+                                modelName = modelName,
+                                modelPath = storedPath,
+                                pathType = if (storedFile.isDirectory) PathType.DIRECTORY else PathType.FILE,
+                                providerType = when (modelType) {
+                                    "TTS_PIPER" -> ProviderType.TTS_PIPER
+                                    "ONNX" -> ProviderType.ONNX
+                                    else -> ProviderType.RAW_ASSET
+                                },
+                                fileSize = when {
+                                    storedFile.isDirectory -> storedFile.walkTopDown().sumOf { it.length() }
+                                    storedFile.exists() -> storedFile.length()
+                                    else -> 0L
+                                },
+                                isActive = true
+                            ),
                             modelType = if (modelType == "IMAGE_TOOL") "RAW_ASSET" else modelType,
                             runOnCpu = true,
                             textEmbeddingSize = 0
@@ -359,9 +397,7 @@ class ModelDownloadService : Service() {
                 }
 
             } catch (e: kotlinx.coroutines.CancellationException) {
-                tempFile?.delete()
                 extractTempDir?.deleteRecursively()
-                AppPaths.tempDownloads(applicationContext, modelId).deleteRecursively()
 
                 updateDownloadState(modelId, DownloadState.Cancelled(modelId))
                 updateNotification(modelName, 0f, notificationId, isCancelled = true)
@@ -377,9 +413,10 @@ class ModelDownloadService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                tempFile?.delete()
                 extractTempDir?.deleteRecursively()
-                AppPaths.tempDownloads(applicationContext, modelId).deleteRecursively()
+                if ((e.message ?: "").contains("ENOSPC", ignoreCase = true)) {
+                    cleanupStaleDownloadArtifacts(modelId)
+                }
 
                 updateDownloadState(modelId, DownloadState.Error(modelId, e.message ?: "Unknown error"))
                 updateNotification(modelName, 0f, notificationId, error = e.message)
@@ -401,6 +438,151 @@ class ModelDownloadService : Service() {
     }
 
     private suspend fun downloadFile(
+        url: String, destFile: File, modelId: String, modelName: String, notificationId: Int
+    ) = withContext(Dispatchers.IO) {
+        downloadBinaryFile(url = url, destination = destFile, shouldCancel = {
+            !downloadJobs.containsKey(modelId) || downloadJobs[modelId]?.isCancelled == true
+        }) { downloadedBytes, totalBytes, avgSpeed, eta ->
+            val progress = if (totalBytes > 0L) {
+                downloadedBytes.toFloat() / totalBytes
+            } else 0f
+
+            updateDownloadState(modelId, DownloadState.Downloading(
+                modelId, progress, downloadedBytes, totalBytes, avgSpeed, eta
+            ))
+
+            val speedText = if (avgSpeed > 0L) {
+                val etaText = if (eta >= 0L) " • ETA ${formatEtaCompact(eta)}" else ""
+                "${formatSpeedCompact(avgSpeed)}$etaText"
+            } else {
+                "${(progress * 100).toInt()}%"
+            }
+            updateNotification(modelName, progress, notificationId, statusText = speedText)
+        }
+    }
+
+    private suspend fun downloadBinaryFile(
+        url: String,
+        destination: File,
+        shouldCancel: (() -> Boolean)? = null,
+        onProgress: ((downloadedBytes: Long, totalBytes: Long, speedBytesPerSec: Long, etaSeconds: Long) -> Unit)? = null
+    ) = withContext(Dispatchers.IO) {
+        destination.parentFile?.mkdirs()
+
+        var existingBytes = destination.takeIf { it.exists() }?.length() ?: 0L
+        val requestBuilder = Request.Builder().url(url)
+        if (existingBytes > 0L) {
+            requestBuilder.header("Range", "bytes=$existingBytes-")
+        }
+
+        val call = client.newCall(requestBuilder.build())
+        try {
+            call.execute().use { response ->
+                if (response.code == 416 && existingBytes > 0L) {
+                    destination.delete()
+                    throw Exception("Partial download is invalid. Restart the download.")
+                }
+                if (!response.isSuccessful) {
+                    throw Exception("Download failed with code: ${response.code}")
+                }
+
+                val append = existingBytes > 0L && response.code == 206
+                if (!append && existingBytes > 0L) {
+                    destination.delete()
+                    existingBytes = 0L
+                }
+
+                val body = response.body ?: throw Exception("Download response is empty")
+                val totalBytes = resolveTotalBytes(response, existingBytes, body.contentLength(), append)
+                var downloadedBytes = existingBytes
+                var lastUpdateTime = 0L
+                val speedSamples = mutableListOf<Long>()
+                var lastSpeedBytes = downloadedBytes
+                var lastSpeedTime = System.currentTimeMillis()
+
+                if (downloadedBytes > 0L) {
+                    onProgress?.invoke(downloadedBytes, totalBytes, 0L, -1L)
+                }
+
+                FileOutputStream(destination, append).buffered().use { output ->
+                    body.byteStream().buffered().use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        var bytes: Int
+
+                        while (input.read(buffer).also { bytes = it } != -1) {
+                            if (shouldCancel?.invoke() == true) {
+                                call.cancel()
+                                throw kotlinx.coroutines.CancellationException("Download cancelled")
+                            }
+
+                            output.write(buffer, 0, bytes)
+                            downloadedBytes += bytes
+
+                            val currentTime = System.currentTimeMillis()
+                            if (currentTime - lastUpdateTime >= 500 || (totalBytes > 0L && downloadedBytes >= totalBytes)) {
+                                val elapsed = currentTime - lastSpeedTime
+                                if (elapsed > 0L) {
+                                    val bytesInInterval = downloadedBytes - lastSpeedBytes
+                                    val speedSample = bytesInInterval * 1000 / elapsed
+                                    speedSamples.add(speedSample)
+                                    if (speedSamples.size > 5) speedSamples.removeAt(0)
+                                    lastSpeedBytes = downloadedBytes
+                                    lastSpeedTime = currentTime
+                                }
+
+                                val avgSpeed = if (speedSamples.isNotEmpty()) {
+                                    speedSamples.average().toLong()
+                                } else 0L
+                                val eta = if (avgSpeed > 0L && totalBytes > 0L) {
+                                    (totalBytes - downloadedBytes) / avgSpeed
+                                } else -1L
+
+                                lastUpdateTime = currentTime
+                                onProgress?.invoke(downloadedBytes, totalBytes, avgSpeed, eta)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            call.cancel()
+            throw e
+        }
+    }
+
+    private suspend fun downloadAuxiliaryFile(
+        url: String,
+        destination: File
+    ) = withContext(Dispatchers.IO) {
+        downloadBinaryFile(url = url, destination = destination)
+    }
+
+    private fun resolveTotalBytes(
+        response: Response,
+        existingBytes: Long,
+        responseBytes: Long,
+        append: Boolean
+    ): Long {
+        if (append) {
+            response.header("Content-Range")
+                ?.substringAfterLast('/')
+                ?.toLongOrNull()
+                ?.takeIf { it > 0L }
+                ?.let { return it }
+            if (responseBytes >= 0L) {
+                return existingBytes + responseBytes
+            }
+        }
+        return responseBytes
+    }
+
+    private fun buildPartialFileName(modelId: String, fileUrl: String): String {
+        val fileName = fileUrl.substringAfterLast('/').substringBefore('?').ifBlank { modelId }
+        val sanitized = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return "${modelId}_${sanitized}.part"
+    }
+
+    private suspend fun downloadFileLegacy(
         url: String, destFile: File, modelId: String, modelName: String, notificationId: Int
     ) = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(url).build()
@@ -466,7 +648,13 @@ class ModelDownloadService : Service() {
                                     modelId, progress, downloadedBytes, totalBytes, avgSpeed, eta
                                 ))
 
-                                updateNotification(modelName, progress, notificationId)
+                                val speedText = if (avgSpeed > 0L) {
+                                    val etaText = if (eta >= 0L) " • ETA ${formatEtaCompact(eta)}" else ""
+                                    "${formatSpeedCompact(avgSpeed)}$etaText"
+                                } else {
+                                    "${(progress * 100).toInt()}%"
+                                }
+                                updateNotification(modelName, progress, notificationId, statusText = speedText)
                             }
                         }
                     }
@@ -571,28 +759,18 @@ class ModelDownloadService : Service() {
             val destFile = File(ttsModelDir, filePath)
             destFile.parentFile?.mkdirs()
 
-            val request = Request.Builder().url(url).build()
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    throw Exception("Failed to download $filePath: ${response.code}")
-                }
-                response.body.byteStream().use { input ->
-                    FileOutputStream(destFile).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            }
+            downloadAuxiliaryFile(url, destFile)
 
             filesDownloaded++
             val progress = filesDownloaded.toFloat() / allFiles.size
             updateDownloadState(modelId, DownloadState.Downloading(
                 modelId, progress, filesDownloaded.toLong(), allFiles.size.toLong()
             ))
-            updateNotification(modelName, progress, notificationId)
+            updateNotification(modelName, progress, notificationId, statusText = "${(progress * 100).toInt()}%")
         }
     }
 
-    private suspend fun downloadAuxiliaryFile(
+    private suspend fun downloadAuxiliaryFileLegacy(
         url: String,
         destination: File
     ) = withContext(Dispatchers.IO) {
@@ -610,9 +788,7 @@ class ModelDownloadService : Service() {
     }
 
     private suspend fun insertModelToDatabase(
-        modelId: String,
-        modelName: String,
-        modelPath: String,
+        model: Model,
         modelType: String,
         runOnCpu: Boolean,
         textEmbeddingSize: Int
@@ -632,27 +808,9 @@ class ModelDownloadService : Service() {
             "RAW_ASSET", "IMAGE_TOOL" -> ProviderType.RAW_ASSET
             else -> ProviderType.GGUF
         }
-
-        val modelFile = File(modelPath)
-        val pathType = if (modelFile.isDirectory) PathType.DIRECTORY else PathType.FILE
-
-        val fileSize = when {
-            modelFile.isDirectory -> modelFile.walkTopDown().sumOf { it.length() }
-            modelFile.exists() -> modelFile.length()
-            else -> 0L
-        }
-
-        val model = Model(
-            id = modelId,
-            modelName = modelName,
-            modelPath = modelPath,
-            pathType = pathType,
-            providerType = providerType,
-            fileSize = fileSize,
-            isActive = true
-        )
-
-        repository.insertModel(model)
+        val normalizedModel = model.copy(providerType = providerType)
+        val existingModel = repository.getModelById(normalizedModel.id)
+        if (existingModel != null) repository.updateModel(normalizedModel) else repository.insertModel(normalizedModel)
 
         val config = when (providerType) {
             ProviderType.DIFFUSION -> {
@@ -662,7 +820,7 @@ class ModelDownloadService : Service() {
                 val backendSelection = DiffusionBackendSelector.resolve(
                     mode = accelerationMode,
                     isQualcommDevice = storeRepository.isQualcommDevice(),
-                    modelDir = File(modelPath)
+                    modelDir = File(normalizedModel.modelPath)
                 )
                 val diffusionConfig = DiffusionConfig(
                     textEmbeddingSize = textEmbeddingSize,
@@ -676,7 +834,7 @@ class ModelDownloadService : Service() {
                 )
                 val inferenceParams = DiffusionInferenceParams()
                 ModelConfig(
-                    modelId = modelId,
+                    modelId = normalizedModel.id,
                     modelLoadingParams = diffusionConfig.toJson(),
                     modelInferenceParams = inferenceParams.toJson()
                 )
@@ -687,23 +845,35 @@ class ModelDownloadService : Service() {
                 val tuningEnabled = appSettings.hardwareTuningEnabled.firstOrNull() ?: true
                 val loadingParams = if (tuningEnabled) {
                     val perfMode = appSettings.performanceMode.firstOrNull() ?: com.santiya.localaihub.global.PerformanceMode.BALANCED
-                    val modelSizeMB = (fileSize / (1024 * 1024)).toInt()
+                    val modelSizeMB = ((normalizedModel.fileSize ?: 0L) / (1024 * 1024)).toInt()
                     val profile = HardwareScanner.scan(this@ModelDownloadService)
-                    DeviceTuner.tune(profile, modelSizeMB, modelName, perfMode)
+                    DeviceTuner.tune(profile, modelSizeMB, normalizedModel.modelName, perfMode)
                 } else {
                     com.santiya.localaihub.models.engine_schema.GgufLoadingParams()
                 }
                 val ggufSchema = GgufEngineSchema(loadingParams = loadingParams)
+                val compatibility = GgufRuntimeSupport.inspect(File(normalizedModel.modelPath))
+                val warningJson = if (!compatibility.supported) {
+                    """{"warning":"runtime_unsupported","gguf_architecture":"${compatibility.architecture ?: "unknown"}","message":"${(compatibility.message ?: "").replace("\"", "\\\"")}"}"""
+                } else null
                 ModelConfig(
-                    modelId = modelId,
+                    modelId = normalizedModel.id,
                     modelLoadingParams = ggufSchema.toLoadingJson(),
-                    modelInferenceParams = ggufSchema.toInferenceJson()
+                    modelInferenceParams = warningJson ?: ggufSchema.toInferenceJson()
+                )
+            }
+
+            ProviderType.GOOGLE_LOCAL -> {
+                ModelConfig(
+                    modelId = normalizedModel.id,
+                    modelLoadingParams = """{"type":"google_local","runtime":"aicore"}""",
+                    modelInferenceParams = """{"type":"chat","runtime":"google_local"}"""
                 )
             }
 
             ProviderType.TTS -> {
                 ModelConfig(
-                    modelId = modelId,
+                    modelId = normalizedModel.id,
                     modelLoadingParams = """{"type":"tts","useNNAPI":false}""",
                     modelInferenceParams = """{"voice":"F1","speed":1.05,"steps":2,"language":"en"}"""
                 )
@@ -711,7 +881,7 @@ class ModelDownloadService : Service() {
 
             ProviderType.TTS_PIPER -> {
                 ModelConfig(
-                    modelId = modelId,
+                    modelId = normalizedModel.id,
                     modelLoadingParams = """{"type":"tts_piper","runtime":"piper","useNNAPI":false}""",
                     modelInferenceParams = """{"voice":"ru","speed":1.0,"steps":1,"language":"ru"}"""
                 )
@@ -719,7 +889,7 @@ class ModelDownloadService : Service() {
 
             ProviderType.ONNX -> {
                 ModelConfig(
-                    modelId = modelId,
+                    modelId = normalizedModel.id,
                     modelLoadingParams = """{"type":"onnx","runtime":"vision"}""",
                     modelInferenceParams = """{"capability":"vision"}"""
                 )
@@ -727,18 +897,38 @@ class ModelDownloadService : Service() {
 
             ProviderType.RAW_ASSET -> {
                 ModelConfig(
-                    modelId = modelId,
+                    modelId = normalizedModel.id,
                     modelLoadingParams = """{"type":"raw_asset","runtime":"none"}""",
                     modelInferenceParams = """{"warning":"high_chance_not_runnable"}"""
                 )
             }
         }
 
-        repository.insertConfig(config)
+        val existingConfig = repository.getConfigByModelId(normalizedModel.id)
+        if (existingConfig != null) repository.updateConfig(config) else repository.insertConfig(config)
     }
 
     private fun cancelDownload(modelId: String) {
         downloadJobs[modelId]?.cancel()
+    }
+
+    private fun cleanupStaleDownloadArtifacts(activeModelId: String? = null) {
+        runCatching {
+            val tempRoot = File(applicationContext.filesDir, "temp_downloads")
+            val activeIds = downloadJobs
+                .filterValues { it.isActive }
+                .keys
+                .toMutableSet()
+                .apply { activeModelId?.let(::add) }
+
+            tempRoot.listFiles().orEmpty().forEach { dir ->
+                if (!dir.isDirectory) return@forEach
+                if (activeIds.contains(dir.name)) return@forEach
+                dir.deleteRecursively()
+            }
+        }.onFailure {
+            Log.w("DownloadService", "Failed to cleanup stale temp downloads: ${it.message}")
+        }
     }
 
     private fun createNotificationChannel() {
@@ -753,6 +943,7 @@ class ModelDownloadService : Service() {
     private fun createNotification(
         modelName: String,
         progress: Float,
+        statusText: String? = null,
         isExtracting: Boolean = false,
         isProcessing: Boolean = false
     ): android.app.Notification {
@@ -763,6 +954,7 @@ class ModelDownloadService : Service() {
         }
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID).setContentTitle(title)
+            .setContentText(statusText)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setProgress(100, (progress * 100).toInt(), isExtracting || isProcessing)
             .setOngoing(true).build()
@@ -776,7 +968,8 @@ class ModelDownloadService : Service() {
         error: String? = null,
         isExtracting: Boolean = false,
         isProcessing: Boolean = false,
-        isCancelled: Boolean = false
+        isCancelled: Boolean = false,
+        statusText: String? = null,
     ) {
         val notification = when {
             isSuccess -> {
@@ -800,7 +993,7 @@ class ModelDownloadService : Service() {
             }
 
             else -> {
-                createNotification(modelName, progress, isExtracting, isProcessing)
+                createNotification(modelName, progress, statusText, isExtracting, isProcessing)
             }
         }
 
@@ -812,5 +1005,24 @@ class ModelDownloadService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
+    }
+
+    private fun formatSpeedCompact(bytesPerSecond: Long): String {
+        if (bytesPerSecond <= 0L) return "0 B/s"
+        val units = listOf("B/s", "KB/s", "MB/s", "GB/s")
+        var value = bytesPerSecond.toDouble()
+        var unitIndex = 0
+        while (value >= 1024 && unitIndex < units.lastIndex) {
+            value /= 1024.0
+            unitIndex++
+        }
+        val formatted = if (value >= 100) "%.0f".format(value) else "%.1f".format(value)
+        return "$formatted ${units[unitIndex]}"
+    }
+
+    private fun formatEtaCompact(seconds: Long): String {
+        val minutes = seconds / 60
+        val remain = seconds % 60
+        return if (minutes > 0) "${minutes}m ${remain}s" else "${remain}s"
     }
 }

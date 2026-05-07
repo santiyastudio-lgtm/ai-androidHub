@@ -28,6 +28,9 @@ if not defined JAVA_CMD (
 
 set "DATA_ROOT=%ROOT%data"
 set "HAS_BUNDLE_DATA="
+set "PAIRING_ARG="
+set "ANDROID_PORT_ARG="
+set "CORE_URL_ARG="
 if exist "%DATA_ROOT%\" (
   set "HAS_BUNDLE_DATA=1"
   if not exist "%DATA_ROOT%\models" mkdir "%DATA_ROOT%\models" >nul 2>nul
@@ -36,6 +39,10 @@ if exist "%DATA_ROOT%\" (
     >>"%DATA_ROOT%\peers.csv" echo # Peer-1,192.168.0.21,17860,6144,8192,8,10.5,RTX-or-NPU-summary
   )
 )
+
+if defined HUB_PAIRING_TOKEN set "PAIRING_ARG=--pairing-token=%HUB_PAIRING_TOKEN%"
+if defined ANDROID_NODE_PORT set "ANDROID_PORT_ARG=--android-node-port=%ANDROID_NODE_PORT%"
+if defined WINDOWS_CORE_URL set "CORE_URL_ARG=--core-url=%WINDOWS_CORE_URL%"
 
 set "SUPPRESS_BANNER="
 for %%A in (%*) do (
@@ -50,20 +57,27 @@ if not defined SUPPRESS_BANNER (
     echo Models directory: "%DATA_ROOT%\models"
     echo Peers file: "%DATA_ROOT%\peers.csv"
   )
+  if defined HUB_PAIRING_TOKEN (
+    echo Pairing token: configured from HUB_PAIRING_TOKEN
+  ) else (
+    echo Pairing token: not configured
+  )
+  if defined WINDOWS_CORE_URL echo Native core: %WINDOWS_CORE_URL%
+  echo Dashboard: http://127.0.0.1:17860/
   echo Press Ctrl+C to stop the service.
 )
 
 if "%~1"=="" (
   if defined HAS_BUNDLE_DATA (
-    "%JAVA_CMD%" -jar "%JAR%" --headless "--models-dir=%DATA_ROOT%\models" "--peers-file=%DATA_ROOT%\peers.csv"
+    "%JAVA_CMD%" -jar "%JAR%" --headless "--models-dir=%DATA_ROOT%\models" "--peers-file=%DATA_ROOT%\peers.csv" %PAIRING_ARG% %ANDROID_PORT_ARG% %CORE_URL_ARG%
   ) else (
-    "%JAVA_CMD%" -jar "%JAR%" --headless
+    "%JAVA_CMD%" -jar "%JAR%" --headless %PAIRING_ARG% %ANDROID_PORT_ARG% %CORE_URL_ARG%
   )
 ) else (
   if defined HAS_BUNDLE_DATA (
-    "%JAVA_CMD%" -jar "%JAR%" "--models-dir=%DATA_ROOT%\models" "--peers-file=%DATA_ROOT%\peers.csv" %*
+    "%JAVA_CMD%" -jar "%JAR%" "--models-dir=%DATA_ROOT%\models" "--peers-file=%DATA_ROOT%\peers.csv" %PAIRING_ARG% %ANDROID_PORT_ARG% %CORE_URL_ARG% %*
   ) else (
-    "%JAVA_CMD%" -jar "%JAR%" %*
+    "%JAVA_CMD%" -jar "%JAR%" %PAIRING_ARG% %ANDROID_PORT_ARG% %CORE_URL_ARG% %*
   )
 )
 

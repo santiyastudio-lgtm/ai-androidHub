@@ -64,7 +64,7 @@ internal fun LazyListScope.generalSettingsSection(
             title = "Вызов инструментов",
             description = when {
                 toolCallingBypassEnabled -> "Обход включён — инструменты доступны для всех моделей"
-                hasToolCallingModel -> "Любая модель с chat template может вызывать инструменты"
+                hasToolCallingModel -> "Любая модель с шаблоном чата может вызывать инструменты"
                 else -> "Установите GGUF-модель, чтобы включить инструменты"
             },
             checked = toolCallingEnabled && canEnableToolCalling,
@@ -120,13 +120,13 @@ internal fun LazyListScope.generalSettingsSection(
                     )
                 }
                 Text(
-                    text = "Принудительно включает инструменты для моделей без chat template. Может давать ошибки или странные ответы.",
+                    text = "Принудительно включает инструменты для моделей без шаблона чата. Может давать ошибки или странные ответы.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onErrorContainer
                 )
                 SwitchRow(
                     title = "Включить обход",
-                    description = if (toolCallingBypassEnabled) "Инструменты принудительно включены для всех моделей" else "Инструменты доступны только для моделей с chat template",
+                    description = if (toolCallingBypassEnabled) "Инструменты принудительно включены для всех моделей" else "Инструменты доступны только для моделей с шаблоном чата",
                     checked = toolCallingBypassEnabled,
                     onCheckedChange = { viewModel.setToolCallingBypassEnabled(it) },
                     titleColor = MaterialTheme.colorScheme.error
@@ -339,11 +339,11 @@ internal fun LazyListScope.modelConfigurationSection(
     item { Spacer(Modifier.height(Standards.SpacingSm)) }
     item { SectionDivider() }
     item {
-        SectionHeader(title = "Model Configuration") {
+        SectionHeader(title = "Конфигурация модели") {
             ActionTextButton(
                 onClickListener = onModelEditor,
                 icon = TnIcons.Sparkles,
-                text = "Configure",
+                text = "Настроить",
                 shape = RoundedCornerShape(Standards.CardSmallCornerRadius),
                 enabled = !hardwareTuningEnabled
             )
@@ -353,7 +353,7 @@ internal fun LazyListScope.modelConfigurationSection(
     if (hardwareTuningEnabled) {
         item {
             Text(
-                text = "Model parameters are managed by the performance engine. Disable hardware tuning to edit manually.",
+                text = "Параметры модели сейчас управляются движком производительности. Отключите аппаратную настройку, чтобы редактировать вручную.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
@@ -364,7 +364,7 @@ internal fun LazyListScope.modelConfigurationSection(
     if (installedModels.isEmpty()) {
         item {
             StandardCard(
-                description = "No models installed. Download models from the store."
+                description = "Модели не установлены. Скачайте их из магазина."
             )
         }
     } else {
@@ -389,12 +389,12 @@ internal fun LazyListScope.aiMemorySection(
 ) {
     item { Spacer(Modifier.height(Standards.SpacingSm)) }
     item { SectionDivider() }
-    item { SectionHeader(title = "AI Memory") }
+    item { SectionHeader(title = "Память AI") }
 
     item {
         SwitchRow(
-            title = "AI Memory",
-            description = "Remember facts about you across conversations",
+            title = "Память AI",
+            description = "Запоминать факты о вас между диалогами",
             checked = aiMemoryEnabled,
             onCheckedChange = { viewModel.setAiMemoryEnabled(it) }
         )
@@ -409,12 +409,12 @@ internal fun LazyListScope.aiMemorySection(
         ) {
             Column(modifier = Modifier.padding(Standards.SpacingLg)) {
                 Text(
-                    "View Memories",
+                    "Открыть память",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    "See, search, and manage what the AI remembers about you",
+                    "Просматривайте, ищите и очищайте то, что AI запомнил о вас",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -431,12 +431,12 @@ internal fun LazyListScope.imageGenerationSection(
 ) {
     item { Spacer(Modifier.height(Standards.SpacingSm)) }
     item { SectionDivider() }
-    item { SectionHeader(title = "Image Generation") }
+    item { SectionHeader(title = "Генерация изображений") }
 
     item {
         SwitchRow(
-            title = "Blur Generated Images",
-            description = "Blur images by default, tap to reveal",
+            title = "Размывать сгенерированные изображения",
+            description = "Размывать изображения по умолчанию, нажмите чтобы показать",
             checked = imageBlurEnabled,
             onCheckedChange = { viewModel.setImageBlurEnabled(it) }
         )
@@ -448,15 +448,15 @@ internal fun LazyListScope.imageGenerationSection(
 internal fun LazyListScope.aboutSection(appVersion: String) {
     item { Spacer(Modifier.height(Standards.SpacingSm)) }
     item { SectionDivider() }
-    item { SectionHeader(title = "About") }
+    item { SectionHeader(title = "О приложении") }
 
     item {
         StandardCard(
             title = "SantiyaLocalAiHub",
-            description = "On-device AI РІР‚вЂќ LLM, Image Generation, TTS"
+            description = "Локальный AI: LLM, генерация изображений и озвучка"
         ) {
             BodyLabel(
-                text = "Version $appVersion",
+                text = "Версия $appVersion",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -469,12 +469,12 @@ internal fun LazyListScope.themeSettingsSection(
 ) {
     item { Spacer(Modifier.height(Standards.SpacingSm)) }
     item { SectionDivider() }
-    item { SectionHeader(title = "РћС„РѕСЂРјР»РµРЅРёРµ") }
+    item { SectionHeader(title = "Оформление") }
 
     item {
         StandardCard(
-            title = "РўРµРјР° РїСЂРёР»РѕР¶РµРЅРёСЏ",
-            description = "РЎРёСЃС‚РµРјРЅР°СЏ, РїРѕР»СѓРЅРѕС‡РЅР°СЏ С„РёРѕР»РµС‚РѕРІР°СЏ, С‡С‘СЂРЅРѕ-Р±РµР»Р°СЏ РёР»Рё СЃРІРµС‚Р»Р°СЏ РјСЂР°РјРѕСЂРЅР°СЏ"
+            title = "Тема приложения",
+            description = "Системная, полночная фиолетовая, чёрно-белая или светлая мраморная"
         ) {
             ActionToggleGroup(
                 items = ThemePreset.entries.toList(),
@@ -482,7 +482,7 @@ internal fun LazyListScope.themeSettingsSection(
                 onItemSelected = { viewModel.setThemePreset(it) },
                 itemLabel = {
                     when (it) {
-                        ThemePreset.SYSTEM -> "РЎРёСЃС‚РµРјР°"
+                        ThemePreset.SYSTEM -> "Система"
                         ThemePreset.MIDNIGHT_VIOLET -> "Midnight"
                         ThemePreset.OBSIDIAN_MONO -> "Mono"
                         ThemePreset.MARBLE_LILAC -> "Marble"
@@ -505,11 +505,11 @@ internal fun LazyListScope.preferredModelsSection(
 ) {
     item { Spacer(Modifier.height(Standards.SpacingSm)) }
     item { SectionDivider() }
-    item { SectionHeader(title = "РњРѕРґРµР»Рё РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ") }
+    item { SectionHeader(title = "Модели по умолчанию") }
 
-    val noneOption = PreferenceOption(id = null, label = "РќРµ РІС‹Р±СЂР°РЅР°")
+    val noneOption = PreferenceOption(id = null, label = "Не выбрана")
     val chatOptions = listOf(noneOption) + installedModels
-        .filter { it.providerType == ProviderType.GGUF }
+        .filter { it.providerType == ProviderType.GGUF || it.providerType == ProviderType.GOOGLE_LOCAL }
         .map { PreferenceOption(it.id, it.modelName) }
     val imageOptions = listOf(noneOption) + installedModels
         .filter { it.providerType == ProviderType.DIFFUSION }
@@ -520,8 +520,8 @@ internal fun LazyListScope.preferredModelsSection(
 
     item {
         StandardCard(
-            title = "Р§Р°С‚ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ",
-            description = "Р­С‚Р° РјРѕРґРµР»СЊ Р±СѓРґРµС‚ РѕС‚РєСЂС‹РІР°С‚СЊСЃСЏ РїРµСЂРІРѕР№ РґР»СЏ С‚РµРєСЃС‚РѕРІРѕРіРѕ СЂРµР¶РёРјР°."
+            title = "Чат по умолчанию",
+            description = "Эта модель будет открываться первой для текстового режима."
         ) {
             ActionToggleGroup(
                 items = chatOptions,
@@ -534,8 +534,8 @@ internal fun LazyListScope.preferredModelsSection(
 
     item {
         StandardCard(
-            title = "Live/Р°СЃСЃРёСЃС‚РµРЅС‚",
-            description = "РњРѕРґРµР»СЊ РґР»СЏ СЂРµР¶РёРјР° СЂРµР°Р»СЊРЅРѕРіРѕ РІСЂРµРјРµРЅРё Рё СЃС†РµРЅР°СЂРёРµРІ Р°СЃСЃРёСЃС‚РµРЅС‚Р°."
+            title = "Live/ассистент",
+            description = "Модель для режима реального времени и сценариев ассистента."
         ) {
             ActionToggleGroup(
                 items = chatOptions,
@@ -548,8 +548,8 @@ internal fun LazyListScope.preferredModelsSection(
 
     item {
         StandardCard(
-            title = "Р“РµРЅРµСЂР°С†РёСЏ РёР·РѕР±СЂР°Р¶РµРЅРёР№",
-            description = "РњРѕРґРµР»СЊ РґР»СЏ СЂРµР¶РёРјР° СЃРѕР·РґР°РЅРёСЏ РёР·РѕР±СЂР°Р¶РµРЅРёР№."
+            title = "Генерация изображений",
+            description = "Модель для режима создания изображений."
         ) {
             ActionToggleGroup(
                 items = imageOptions,
@@ -562,8 +562,8 @@ internal fun LazyListScope.preferredModelsSection(
 
     item {
         StandardCard(
-            title = "Р“РѕР»РѕСЃ",
-            description = "РњРѕРґРµР»СЊ РѕР·РІСѓС‡РєРё РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ."
+            title = "Голос",
+            description = "Модель озвучки по умолчанию."
         ) {
             ActionToggleGroup(
                 items = ttsOptions,
@@ -581,12 +581,12 @@ internal fun LazyListScope.externalAccessSection(
 ) {
     item { Spacer(Modifier.height(Standards.SpacingSm)) }
     item { SectionDivider() }
-    item { SectionHeader(title = "Р”РѕСЃС‚СѓРї РґР»СЏ РїСЂРёР»РѕР¶РµРЅРёР№") }
+    item { SectionHeader(title = "Доступ для приложений") }
 
     item {
         SwitchRow(
-            title = "Р Р°Р·СЂРµС€РёС‚СЊ РґРѕСЃС‚СѓРї Рє AI",
-            description = "РљРѕРіРґР° РІС‹РєР»СЋС‡РµРЅРѕ, AIDL, Intent API Рё Р»РѕРєР°Р»СЊРЅС‹Р№ HTTP Р±Р»РѕРєРёСЂСѓСЋС‚СЃСЏ РґР»СЏ РґСЂСѓРіРёС… РїСЂРёР»РѕР¶РµРЅРёР№.",
+            title = "Разрешить доступ к AI",
+            description = "Когда выключено, AIDL, Intent API и локальный HTTP блокируются для других приложений.",
             checked = externalAccessPolicy.enabled,
             onCheckedChange = { viewModel.setExternalAccessEnabled(it) }
         )
@@ -595,8 +595,8 @@ internal fun LazyListScope.externalAccessSection(
     if (externalAccessPolicy.pendingPackages.isNotEmpty()) {
         item {
             StandardCard(
-                title = "РћР¶РёРґР°СЋС‚ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ",
-                description = "РќРѕРІС‹Рµ РїСЂРёР»РѕР¶РµРЅРёСЏ СЃРЅР°С‡Р°Р»Р° РїРѕРїР°РґР°СЋС‚ РІ СЃРїРёСЃРѕРє РѕР¶РёРґР°РЅРёСЏ."
+                title = "Ожидают подтверждения",
+                description = "Новые приложения сначала попадают в список ожидания."
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(Standards.SpacingSm)) {
                     externalAccessPolicy.pendingPackages.forEach { packageName ->
@@ -612,7 +612,7 @@ internal fun LazyListScope.externalAccessSection(
                             ActionTextButton(
                                 onClickListener = { viewModel.approveClient(packageName) },
                                 icon = TnIcons.CircleCheck,
-                                text = "Р Р°Р·СЂРµС€РёС‚СЊ",
+                                text = "Разрешить",
                                 shape = RoundedCornerShape(Standards.RadiusFull)
                             )
                         }
@@ -625,8 +625,8 @@ internal fun LazyListScope.externalAccessSection(
     if (externalAccessPolicy.approvedApps.isNotEmpty()) {
         item {
             StandardCard(
-                title = "Р Р°Р·СЂРµС€С‘РЅРЅС‹Рµ РїСЂРёР»РѕР¶РµРЅРёСЏ",
-                description = "РњРѕР¶РЅРѕ РѕС‚РѕР·РІР°С‚СЊ РґРѕСЃС‚СѓРї РІ Р»СЋР±РѕР№ РјРѕРјРµРЅС‚."
+                title = "Разрешённые приложения",
+                description = "Можно отозвать доступ в любой момент."
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(Standards.SpacingSm)) {
                     externalAccessPolicy.approvedApps.forEach { app ->
@@ -650,7 +650,7 @@ internal fun LazyListScope.externalAccessSection(
                             ActionTextButton(
                                 onClickListener = { viewModel.revokeClient(app.packageName) },
                                 icon = TnIcons.X,
-                                text = "Р—Р°РїСЂРµС‚РёС‚СЊ",
+                                text = "Запретить",
                                 shape = RoundedCornerShape(Standards.RadiusFull)
                             )
                         }
@@ -672,12 +672,12 @@ internal fun LazyListScope.lanSection(
 
     item { Spacer(Modifier.height(Standards.SpacingSm)) }
     item { SectionDivider() }
-    item { SectionHeader(title = "LAN-РїСѓР» СѓСЃС‚СЂРѕР№СЃС‚РІ") }
+    item { SectionHeader(title = "LAN-пул устройств") }
 
     item {
         SwitchRow(
-            title = "Р’РєР»СЋС‡РёС‚СЊ LAN-РїСѓР»",
-            description = "Р Р°СЃРїСЂРµРґРµР»СЏРµС‚ С†РµР»С‹Рµ Р·Р°РґР°С‡Рё РїРѕ СѓСЃС‚СЂРѕР№СЃС‚РІР°Рј РІ Р»РѕРєР°Р»СЊРЅРѕР№ СЃРµС‚Рё.",
+            title = "Включить LAN-пул",
+            description = "Распределяет целые задачи по устройствам в локальной сети.",
             checked = lanHubConfig.enabled,
             onCheckedChange = { viewModel.setLanEnabled(it) }
         )
@@ -685,8 +685,8 @@ internal fun LazyListScope.lanSection(
 
     item {
         SwitchRow(
-            title = "РџРѕРєР°Р·С‹РІР°С‚СЊ СЌС‚Рѕ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ",
-            description = "Р”РµР»Р°РµС‚ С‚РµРєСѓС‰РµРµ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ РґРѕСЃС‚СѓРїРЅС‹Рј РєР°Рє Р»РѕРєР°Р»СЊРЅС‹Р№ AI-СѓР·РµР».",
+            title = "Показывать это устройство",
+            description = "Делает текущее устройство доступным как локальный AI-узел.",
             checked = lanHubConfig.advertiseLocalNode,
             onCheckedChange = { viewModel.setAdvertiseLocalNode(it) },
             enabled = lanHubConfig.enabled
@@ -695,8 +695,8 @@ internal fun LazyListScope.lanSection(
 
     item {
         StandardCard(
-            title = "Pairing token",
-            description = if (lanHubConfig.pairingToken.isBlank()) "РўРѕРєРµРЅ Р±СѓРґРµС‚ СЃРѕР·РґР°РЅ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё." else lanHubConfig.pairingToken
+            title = "Токен сопряжения",
+            description = if (lanHubConfig.pairingToken.isBlank()) "Токен будет создан автоматически." else lanHubConfig.pairingToken
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -705,7 +705,7 @@ internal fun LazyListScope.lanSection(
                 ActionTextButton(
                     onClickListener = { viewModel.regenerateLanToken() },
                     icon = TnIcons.Refresh,
-                    text = "РћР±РЅРѕРІРёС‚СЊ",
+                    text = "Обновить",
                     shape = RoundedCornerShape(Standards.RadiusFull)
                 )
             }
@@ -714,13 +714,13 @@ internal fun LazyListScope.lanSection(
 
     item {
         StandardCard(
-            title = "РЈР·Р»С‹",
-            description = if (nodes.isEmpty()) "РџРѕРєР° РѕР±РЅР°СЂСѓР¶РµРЅ С‚РѕР»СЊРєРѕ Р»РѕРєР°Р»СЊРЅС‹Р№ СѓР·РµР»." else "Р”РѕСЃС‚СѓРїРЅРѕ СѓР·Р»РѕРІ: ${nodes.size}"
+            title = "Узлы",
+            description = if (nodes.isEmpty()) "Пока обнаружен только локальный узел." else "Доступно узлов: ${nodes.size}"
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(Standards.SpacingSm)) {
                 nodes.forEach { node ->
                     Text(
-                        text = "${node.name}: ${node.status} вЂў ${node.installedModelCount} РјРѕРґРµР»РµР№",
+                        text = "${node.name}: ${node.status} • ${node.installedModelCount} моделей",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -737,12 +737,12 @@ internal fun LazyListScope.orchestraSection(
 ) {
     item { Spacer(Modifier.height(Standards.SpacingSm)) }
     item { SectionDivider() }
-    item { SectionHeader(title = "РћСЂРєРµСЃС‚СЂ РјР°Р»РµРЅСЊРєРёС… РјРѕРґРµР»РµР№") }
+    item { SectionHeader(title = "Оркестр маленьких моделей") }
 
     item {
         SwitchRow(
-            title = "Р’РєР»СЋС‡РёС‚СЊ РѕСЂРєРµСЃС‚СЂ",
-            description = "Р РѕСѓС‚РµСЂ + СЃРїРµС†РёР°Р»РёСЃС‚С‹ РґР»СЏ С‡Р°С‚Р°, С„Р°Р№Р»РѕРІ Рё СЃСѓРјРјР°СЂРёР·Р°С†РёРё.",
+            title = "Включить оркестр",
+            description = "Роутер + специалисты для чата, файлов и суммаризации.",
             checked = orchestraConfig.enabled,
             onCheckedChange = { viewModel.setOrchestraEnabled(it) }
         )
@@ -750,8 +750,8 @@ internal fun LazyListScope.orchestraSection(
 
     item {
         SwitchRow(
-            title = "РђРІС‚РѕРЅР°Р·РЅР°С‡РµРЅРёРµ СЂРѕР»РµР№",
-            description = "Hub СЃР°Рј РїРѕРґР±РёСЂР°РµС‚ РјР°Р»РµРЅСЊРєРёРµ РјРѕРґРµР»Рё РїРѕРґ СЂРѕР»Рё РѕСЂРєРµСЃС‚СЂР°.",
+            title = "Автоназначение ролей",
+            description = "Hub сам подбирает маленькие модели под роли оркестра.",
             checked = orchestraConfig.autoAssign,
             onCheckedChange = { viewModel.setOrchestraAutoAssign(it) },
             enabled = orchestraConfig.enabled
@@ -760,8 +760,8 @@ internal fun LazyListScope.orchestraSection(
 
     item {
         SwitchRow(
-            title = "Р Р°Р·СЂРµС€РёС‚СЊ spillover РІ LAN",
-            description = "Р•СЃР»Рё РїР°РјСЏС‚Рё РЅРµ С…РІР°С‚Р°РµС‚, РѕС‚РґРµР»СЊРЅС‹Рµ Р·Р°РґР°С‡Рё РјРѕР¶РЅРѕ РѕС‚РґР°РІР°С‚СЊ СЃРѕСЃРµРґРЅРµРјСѓ СѓСЃС‚СЂРѕР№СЃС‚РІСѓ.",
+            title = "Разрешить spillover в LAN",
+            description = "Если памяти не хватает, отдельные задачи можно отдавать соседнему устройству.",
             checked = orchestraConfig.allowLanSpillover,
             onCheckedChange = { viewModel.setOrchestraLanSpillover(it) },
             enabled = orchestraConfig.enabled
@@ -770,11 +770,11 @@ internal fun LazyListScope.orchestraSection(
 
     item {
         StandardCard(
-            title = "РЎРѕСЃС‚РѕСЏРЅРёРµ РѕСЂРєРµСЃС‚СЂР°",
+            title = "Состояние оркестра",
             description = orchestraCapabilityState.reason
         ) {
             Text(
-                text = "РџРѕРґС…РѕРґСЏС‰РёС… РјР°Р»РµРЅСЊРєРёС… РјРѕРґРµР»РµР№: ${orchestraCapabilityState.eligibleModelIds.size}",
+                text = "Подходящих маленьких моделей: ${orchestraCapabilityState.eligibleModelIds.size}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -783,11 +783,11 @@ internal fun LazyListScope.orchestraSection(
 
     item {
         StandardCard(
-            title = "Р РѕР»Рё",
+            title = "Роли",
             description = "Router, chat, files, vision, code, summary/TTS"
         ) {
             Text(
-                text = "Р’ СЌС‚РѕР№ РІРµСЂСЃРёРё СЂРѕР»Рё РЅР°Р·РЅР°С‡Р°СЋС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё Рё СЂР°Р±РѕС‚Р°СЋС‚ РєР°Рє СѓРїСЂР°РІР»СЏРµРјС‹Р№ СЂРѕСѓС‚РµСЂ, Р° РЅРµ РјР°СЃСЃРѕРІС‹Р№ Р°РЅСЃР°РјР±Р»СЊ.",
+                text = "В этой версии роли назначаются автоматически и работают как управляемый роутер, а не массовый ансамбль.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

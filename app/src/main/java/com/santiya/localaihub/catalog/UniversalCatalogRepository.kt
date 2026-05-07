@@ -289,7 +289,7 @@ class UniversalCatalogRepository {
 }
 
 private fun gemmaAggressiveStarterModels(): List<HuggingFaceModel> {
-    val repoPath = "HauhauCS/Gemma-4-E2B-Uncensored-HauhauCS-Aggressive-GGUF"
+    val repoPath = "HauhauCS/Gemma-4-E2B-Uncensored-HauhauCS-Aggressive"
     val pageUrl = "https://huggingface.co/$repoPath"
     val commonFamilyTags = listOf("Gemma", "Uncensored")
     val commonWarnings = experimentalWarnings(

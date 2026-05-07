@@ -14,29 +14,47 @@ public final class WindowsHubApp {
             System.out.println(Arguments.usage());
             return;
         }
-        WindowsHubService service = new WindowsHubService(options.port(), options.modelsDir(), options.peersFile());
+        if (!options.headless()) {
+            WindowsHubDesktopApp.launch(options);
+            return;
+        }
+        WindowsHubService service = new WindowsHubService(
+            options.port(),
+            options.modelsDir(),
+            options.peersFile(),
+            options.pairingToken(),
+            options.androidNodePort(),
+            options.coreBaseUrl()
+        );
         service.start();
         System.out.println(service.statusLine());
         System.out.println("Models directory: " + options.modelsDir().toAbsolutePath());
         System.out.println("Peers file: " + options.peersFile().toAbsolutePath());
+        System.out.println("Android node port: " + options.androidNodePort());
+        System.out.println("Pairing token configured: " + (!options.pairingToken().isBlank()));
+        System.out.println("Core base URL: " + (options.coreBaseUrl().isBlank() ? "(local Java mode)" : options.coreBaseUrl()));
         System.out.println("Press Ctrl+C to stop.");
         Runtime.getRuntime().addShutdownHook(new Thread(service::stop));
-
-        if (options.headless()) {
-            new CountDownLatch(1).await();
-            return;
-        }
-
-        System.out.println("GUI mode is not implemented yet. The Windows Hub is running as a console service.");
-        System.out.println("Use --headless for service mode or open the local API at http://127.0.0.1:" + options.port());
         new CountDownLatch(1).await();
     }
 
-    record Arguments(int port, Path modelsDir, Path peersFile, boolean headless, boolean help) {
+    record Arguments(
+        int port,
+        Path modelsDir,
+        Path peersFile,
+        boolean headless,
+        boolean help,
+        String pairingToken,
+        int androidNodePort,
+        String coreBaseUrl
+    ) {
         static Arguments parse(String[] args) {
             int port = 17860;
+            int androidNodePort = 17888;
             boolean headless = false;
             boolean help = false;
+            String pairingToken = "";
+            String coreBaseUrl = System.getenv("WINDOWS_CORE_URL");
             Path appHome = defaultAppHome();
             Path modelsDir = appHome.resolve("models");
             Path peersFile = appHome.resolve("peers.csv");
@@ -52,9 +70,18 @@ public final class WindowsHubApp {
                     modelsDir = Path.of(arg.substring("--models-dir=".length())).toAbsolutePath();
                 } else if (lower.startsWith("--peers-file=")) {
                     peersFile = Path.of(arg.substring("--peers-file=".length())).toAbsolutePath();
+                } else if (lower.startsWith("--pairing-token=")) {
+                    pairingToken = arg.substring("--pairing-token=".length()).trim();
+                } else if (lower.startsWith("--android-node-port=")) {
+                    androidNodePort = safeParseInt(arg.substring("--android-node-port=".length()), androidNodePort);
+                } else if (lower.startsWith("--core-url=")) {
+                    coreBaseUrl = arg.substring("--core-url=".length()).trim();
                 }
             }
-            return new Arguments(port, modelsDir, peersFile, headless, help);
+            if (coreBaseUrl == null) {
+                coreBaseUrl = "";
+            }
+            return new Arguments(port, modelsDir, peersFile, headless, help, pairingToken, androidNodePort, coreBaseUrl);
         }
 
         static String usage() {
@@ -67,6 +94,9 @@ public final class WindowsHubApp {
                 "  --port=17860",
                 "  --models-dir=C:\\path\\to\\models",
                 "  --peers-file=C:\\path\\to\\peers.csv",
+                "  --pairing-token=shared-lan-token",
+                "  --android-node-port=17888",
+                "  --core-url=http://127.0.0.1:17861",
                 "  --help"
             );
         }
@@ -79,7 +109,7 @@ public final class WindowsHubApp {
             }
         }
 
-        private static Path defaultAppHome() {
+        static Path defaultAppHome() {
             String localAppData = System.getenv("LOCALAPPDATA");
             if (localAppData != null && !localAppData.isBlank()) {
                 return Path.of(localAppData, "SantiyaLocalAiHub", "windows-hub");

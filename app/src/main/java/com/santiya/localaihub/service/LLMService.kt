@@ -33,6 +33,8 @@ import com.santiya.localaihub.engine.GGUFEngine
 import com.santiya.localaihub.engine.GenerationEvent
 import com.santiya.localaihub.hub.ExternalAccessManager
 import com.santiya.localaihub.hub.LanCoordinator
+import com.santiya.localaihub.hub.LanHubConfig
+import com.santiya.localaihub.hub.LanNodeHttpServer
 import com.santiya.localaihub.hub.ModelOrchestraManager
 import com.santiya.localaihub.hub.OrchestraConfig
 import com.santiya.localaihub.models.data.HFModelRepository
@@ -82,6 +84,7 @@ class LLMService : Service() {
     private val appSettings by lazy { AppSettingsDataStore(applicationContext) }
     private val externalAccessManager by lazy { ExternalAccessManager(applicationContext) }
     private val lanCoordinator by lazy { LanCoordinator(applicationContext) }
+    private val lanNodeHttpServer = LanNodeHttpServer()
     private val orchestraManager by lazy { ModelOrchestraManager(applicationContext) }
     private val serviceJson = Json { encodeDefaults = true; ignoreUnknownKeys = true }
     private val modelStoreRepository by lazy { ModelStoreRepository(applicationContext) }
@@ -416,6 +419,73 @@ class LLMService : Service() {
             }
         }
         return JSONObject().put("ok", true).put("status", "completed").put("response", resultBuilder.toString().trim()).toString()
+    }
+
+    private fun handleLanExecutionJson(requestJson: String): String {
+        val request = runCatching {
+            serviceJson.decodeFromString<HubExecutionRequest>(requestJson)
+        }.getOrElse {
+            return """{"ok":false,"status":"invalid_request","message":"Invalid LAN execution request JSON."}"""
+        }
+
+        return when (request.capability.lowercase()) {
+            "chat",
+            "files",
+            "summary",
+            "code",
+            "instructions",
+            "live_reasoning" -> binder.runWithModeJson(requestJson)
+
+            "face_detection",
+            "face_recognition",
+            "object_detection",
+            "assistant_live",
+            "image_segmentation",
+            "ocr",
+            "vision",
+            "text" -> binder.runVisionJson(requestJson)
+
+            "image_generation",
+            "video_generation" -> binder.runImageJson(requestJson)
+
+            else -> JSONObject()
+                .put("ok", false)
+                .put("status", "unsupported_capability")
+                .put("message", "Capability ${request.capability} is not available through the LAN node API.")
+                .toString()
+        }
+    }
+
+    private fun refreshLanRuntime(config: LanHubConfig) {
+        if (!config.enabled) {
+            lanCoordinator.stopLanRuntime()
+            lanNodeHttpServer.stop()
+            httpApiController.updateState(enabled = false, bindAddress = "127.0.0.1", port = null)
+            return
+        }
+
+        val models = installedModelsSnapshot()
+        lanCoordinator.applyLanRuntime(models, config, LanNodeHttpServer.DEFAULT_PORT)
+        lanNodeHttpServer.start(
+            port = LanNodeHttpServer.DEFAULT_PORT,
+            pairingToken = config.pairingToken,
+            statusJsonProvider = {
+                lanCoordinator.statusJson(installedModelsSnapshot(), config, LanNodeHttpServer.DEFAULT_PORT)
+            },
+            distributedPlanJsonProvider = { modelId ->
+                lanCoordinator.distributedPlanJson(
+                    models = installedModelsSnapshot(),
+                    modelId = modelId.orEmpty(),
+                    config = config
+                )
+            },
+            executeJsonHandler = ::handleLanExecutionJson
+        )
+        httpApiController.updateState(
+            enabled = true,
+            bindAddress = "0.0.0.0",
+            port = LanNodeHttpServer.DEFAULT_PORT
+        )
     }
 
     private data class DetectedFaceBox(
@@ -916,8 +986,10 @@ class LLMService : Service() {
                         AppStateManager.setModelLoaded(modelName)
                         callback.onSuccess()
                     } else {
-                        AppStateManager.setError("Failed to load model: $modelName")
-                        callback.onError("Failed to load model")
+                        val message = ggufEngine.getLastLoadErrorMessage()
+                            ?: "Failed to load model: $modelName"
+                        AppStateManager.setError(message)
+                        callback.onError(message)
                     }
                 } catch (e: Exception) {
                     AppStateManager.setError(e.message ?: "Unknown error loading model")
@@ -953,8 +1025,10 @@ class LLMService : Service() {
                         AppStateManager.setModelLoaded(modelName)
                         callback.onSuccess()
                     } else {
-                        AppStateManager.setError("Failed to load model from FD: $modelName")
-                        callback.onError("Failed to load model from file descriptor")
+                        val message = ggufEngine.getLastLoadErrorMessage()
+                            ?: "Failed to load model from file descriptor: $modelName"
+                        AppStateManager.setError(message)
+                        callback.onError(message)
                     }
                 } catch (e: Exception) {
                     AppStateManager.setError(e.message ?: "Unknown error loading model from FD")
@@ -1299,6 +1373,16 @@ class LLMService : Service() {
             }
         }
 
+        scope.launch(Dispatchers.IO) {
+            appSettings.lanHubConfig.collect { rawConfig ->
+                val safeConfig = lanCoordinator.ensurePairingToken(rawConfig)
+                if (safeConfig != rawConfig) {
+                    appSettings.saveLanHubConfig(safeConfig)
+                }
+                refreshLanRuntime(safeConfig)
+            }
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceCompat.startForeground(
                 this, 1, createNotification(),
@@ -1313,6 +1397,9 @@ class LLMService : Service() {
 
     override fun onDestroy() {
         instance = null
+        lanNodeHttpServer.stop()
+        lanCoordinator.stopLanRuntime()
+        httpApiController.updateState(enabled = false, bindAddress = "127.0.0.1", port = null)
         runBlocking(Dispatchers.IO) {
             runCatching { ggufEngine.unload() }
                 .onFailure { Log.w(TAG, "Failed to unload GGUF engine during service shutdown", it) }

@@ -27,11 +27,23 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.santiya.localaihub.global.Standards
+import com.santiya.localaihub.global.localizedText
 import com.santiya.localaihub.models.enums.ProviderType
 import com.santiya.localaihub.models.plugins.PluginInfo
 import com.santiya.localaihub.ui.components.ActionSwitch
 import com.santiya.localaihub.ui.components.ActionTextButton
 import com.santiya.localaihub.ui.icons.TnIcons
+
+@Composable
+private fun localizedPluginName(name: String): String = when (name) {
+    "NotePad" -> localizedText("Заметки", "NotePad")
+    "System Info" -> localizedText("Система", "System Info")
+    "Dev Utils" -> localizedText("Dev-инструменты", "Dev Utils")
+    "Calculator" -> localizedText("Калькулятор", "Calculator")
+    "File Manager" -> localizedText("Файлы", "File Manager")
+    "Date & Time" -> localizedText("Дата и время", "Date & Time")
+    else -> name
+}
 
 // в”Ђв”Ђ MoreOptionsOverlay в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
@@ -93,7 +105,8 @@ internal fun MoreOptionsOverlay(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = if (loadedRagCount > 0) "$loadedRagCount loaded" else "None loaded",
+                            text = if (loadedRagCount > 0) localizedText("Загружено: $loadedRagCount", "$loadedRagCount loaded")
+                            else localizedText("Не загружено", "None loaded"),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
@@ -101,7 +114,7 @@ internal fun MoreOptionsOverlay(
                     ActionTextButton(
                         onClickListener = onRagManage,
                         icon = TnIcons.Database,
-                        text = "Manage"
+                        text = localizedText("Открыть", "Manage")
                     )
                     ActionSwitch(
                         checked = isRagEnabled,
@@ -125,7 +138,7 @@ internal fun MoreOptionsOverlay(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = "Plugins",
+                            text = localizedText("Плагины", "Plugins"),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -142,14 +155,14 @@ internal fun MoreOptionsOverlay(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = plugin.name,
+                                        text = localizedPluginName(plugin.name),
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Medium,
                                         color = if (isToolCallingModelLoaded) MaterialTheme.colorScheme.onSurface
                                         else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                     )
                                     Text(
-                                        text = "${plugin.toolDefinitionBuilder.size} tools",
+                                        text = localizedText("Инструментов: ${plugin.toolDefinitionBuilder.size}", "${plugin.toolDefinitionBuilder.size} tools"),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                     )
@@ -165,7 +178,7 @@ internal fun MoreOptionsOverlay(
                         ActionTextButton(
                             onClickListener = onManagePlugins,
                             icon = TnIcons.Wrench,
-                            text = "Configure"
+                            text = localizedText("Настроить", "Configure")
                         )
                     }
                 }
@@ -206,7 +219,7 @@ internal fun QuickLookChipRow(
             }
             if (isWebSearchEnabled) {
                 StatusChip(
-                    label = "Web Search",
+                    label = localizedText("Веб-поиск", "Web Search"),
                     color = MaterialTheme.colorScheme.tertiary,
                     onClick = onWebSearchChipClick
                 )
@@ -220,7 +233,7 @@ internal fun QuickLookChipRow(
             }
             if (isMemoryEnabled) {
                 StatusChip(
-                    label = "Memory",
+                    label = localizedText("Память", "Memory"),
                     color = MaterialTheme.colorScheme.secondary,
                     onClick = onMemoryChipClick
                 )
@@ -274,6 +287,7 @@ internal fun ReloadModelDialog(
 ) {
     val typeLabel = when (modelType) {
         ProviderType.GGUF -> "Text"
+        ProviderType.GOOGLE_LOCAL -> "Google Local"
         ProviderType.DIFFUSION -> "Image"
         ProviderType.TTS -> "TTS"
         ProviderType.TTS_PIPER -> "Piper RU"

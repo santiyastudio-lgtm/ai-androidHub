@@ -60,6 +60,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.santiya.localaihub.global.Standards
+import com.santiya.localaihub.global.cleanUiText
 import com.santiya.localaihub.models.ui.ActionIcon
 import com.santiya.localaihub.models.ui.ActionItem
 import com.santiya.localaihub.ui.icons.TnIcons
@@ -257,7 +258,7 @@ fun ActionTextButton(
     ) {
         Icon(painterResource(icon), contentDescription)
         Spacer(Modifier.width(6.dp))
-        Text(text)
+        Text(cleanUiText(text))
     }
 }
 
@@ -287,7 +288,7 @@ fun ActionTextButton(
     ) {
         Icon(icon, contentDescription)
         Spacer(Modifier.width(6.dp))
-        Text(text)
+        Text(cleanUiText(text))
     }
 }
 
@@ -527,7 +528,7 @@ fun <T> ActionToggleGroup(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = itemLabel(item),
+                            text = cleanUiText(itemLabel(item)),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                             color = contentColor,

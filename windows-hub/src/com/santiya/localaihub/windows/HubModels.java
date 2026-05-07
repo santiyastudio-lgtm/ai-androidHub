@@ -13,6 +13,8 @@ enum DistributedNodePlatform {
 
 enum DistributedTransportProtocol {
     MANUAL_HTTP,
+    NSD_HTTP,
+    NSD_LIBP2P,
     LIBP2P_PLANNED,
     NSD_PLANNED
 }
@@ -137,4 +139,12 @@ record PeerNodeConfig(
     int cpuCores,
     double computeScore,
     String acceleratorSummary
+) {}
+
+record DiscoveredLanNode(
+    String host,
+    int port,
+    NodeResourceSnapshot snapshot,
+    List<String> supportedModels,
+    boolean pairingRequired
 ) {}

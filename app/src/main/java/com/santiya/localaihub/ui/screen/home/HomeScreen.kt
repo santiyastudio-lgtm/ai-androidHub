@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.santiya.localaihub.data.AppSettingsDataStore
+import com.santiya.localaihub.models.state.AppState
 import com.santiya.localaihub.ui.components.LocalCodeHighlightEnabled
 import com.santiya.localaihub.viewmodel.ChatViewModel
 import com.santiya.localaihub.viewmodel.LLMModelViewModel
@@ -31,6 +32,9 @@ fun HomeScreen(
     onStoreButtonClicked: () -> Unit,
     onFilesClick: () -> Unit,
     onLiveClick: () -> Unit,
+    onOfflineCityClick: () -> Unit,
+    onApiModelsClick: () -> Unit,
+    onBrowserClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onDeveloperClick: () -> Unit,
     onVaultManagerClick: () -> Unit,
@@ -48,9 +52,19 @@ fun HomeScreen(
         .collectAsStateWithLifecycle(initialValue = true)
     val chatUiState by chatViewModel.chatUiState.collectAsStateWithLifecycle()
     val chatConfigState by chatViewModel.chatConfigState.collectAsStateWithLifecycle()
+    val appState by com.santiya.localaihub.state.AppStateManager.appState.collectAsStateWithLifecycle()
     val installedModels by llmModelViewModel.installedModels.collectAsStateWithLifecycle(initialValue = emptyList())
-    val currentModelId by llmModelViewModel.currentModelID.collectAsStateWithLifecycle()
-    val currentModelName = installedModels.firstOrNull { it.id == currentModelId }?.modelName
+    val currentModelNameFromVm by llmModelViewModel.currentModelName.collectAsStateWithLifecycle()
+    val currentModelName = currentModelNameFromVm
+        ?: when (val state = appState) {
+            is AppState.ModelLoaded -> state.modelName
+            is AppState.LoadingModel -> state.modelName
+            is AppState.GeneratingText -> state.modelName
+            is AppState.GeneratingImage -> state.modelName
+            is AppState.GeneratingAudio -> state.modelName
+            is AppState.Error -> state.modelName
+            else -> null
+        }
 
     // Navigate to QNN setup when a diffusion model needs it
     val needsQnnSetup by llmModelViewModel.needsQnnSetup.collectAsStateWithLifecycle()
@@ -114,7 +128,10 @@ fun HomeScreen(
                 llmModelViewModel = llmModelViewModel,
                 onStoreClick = onStoreButtonClicked,
                 onFilesClick = onFilesClick,
-                onLiveClick = onLiveClick
+                onLiveClick = onLiveClick,
+                onOfflineCityClick = onOfflineCityClick,
+                onApiModelsClick = onApiModelsClick,
+                onBrowserClick = onBrowserClick
             )
         }
     }

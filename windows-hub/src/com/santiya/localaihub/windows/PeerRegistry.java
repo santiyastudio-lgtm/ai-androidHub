@@ -21,12 +21,15 @@ final class PeerRegistry {
         List<PeerNodeConfig> peers = new ArrayList<>();
         try {
             for (String line : Files.readAllLines(peersFile, StandardCharsets.UTF_8)) {
-                String trimmed = line.trim();
+                String trimmed = line.replace("\uFEFF", "").trim();
                 if (trimmed.isBlank() || trimmed.startsWith("#")) {
                     continue;
                 }
                 String[] parts = trimmed.split(",", -1);
                 if (parts.length < 8) {
+                    continue;
+                }
+                if (parts[0].trim().equalsIgnoreCase("name") && parts[1].trim().equalsIgnoreCase("host")) {
                     continue;
                 }
                 peers.add(new PeerNodeConfig(

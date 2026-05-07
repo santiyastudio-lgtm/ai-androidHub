@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.santiya.localaihub.global.Standards
+import com.santiya.localaihub.global.cleanUiText
 
 // ==================== Text Components ====================
 
@@ -44,7 +45,7 @@ fun BodyLabel(
     maxLines: Int = Int.MAX_VALUE
 ) {
     Text(
-        text = text,
+        text = cleanUiText(text),
         style = MaterialTheme.typography.bodyMedium,
         color = color,
         maxLines = maxLines,
@@ -63,7 +64,7 @@ fun CaptionText(
     color: Color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
 ) {
     Text(
-        text = text,
+        text = cleanUiText(text),
         style = MaterialTheme.typography.labelSmall,
         color = color,
         modifier = modifier
@@ -121,14 +122,14 @@ fun SwitchRow(
             // Title + description
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = title,
+                    text = cleanUiText(title),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     color = titleColor ?: if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                 )
                 if (description != null) {
                     Text(
-                        text = description,
+                        text = cleanUiText(description),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 0.7f else 0.38f)
                     )
@@ -207,7 +208,7 @@ fun StandardCard(
                     Column(modifier = Modifier.weight(1f)) {
                         if (title != null) {
                             Text(
-                                text = title,
+                                text = cleanUiText(title),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -215,10 +216,10 @@ fun StandardCard(
                         }
                         if (description != null) {
                             Text(
-                                text = description,
+                                text = cleanUiText(description),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                maxLines = 2,
+                                maxLines = 3,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
@@ -277,12 +278,12 @@ fun InfoCard(
                 )
             }
             Text(
-                text = title,
+                text = cleanUiText(title),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                text = value,
+                text = cleanUiText(value),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 color = contentColor
@@ -314,7 +315,7 @@ fun InfoBadge(
             modifier = Modifier.padding(horizontal = Standards.SpacingSm)
         ) {
             Text(
-                text = text,
+                text = cleanUiText(text),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = contentColor,
@@ -353,7 +354,7 @@ fun StatusBadge(
                 .background(dotColor, RoundedCornerShape(50))
         )
         Text(
-            text = text,
+            text = cleanUiText(text),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Medium,
             color = if (isActive) activeColor else inactiveColor
@@ -381,7 +382,7 @@ fun SectionHeader(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(
-            text = title,
+            text = cleanUiText(title),
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.primary
@@ -416,7 +417,7 @@ fun SectionDivider(
                     .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
             )
             Text(
-                text = label,
+                text = cleanUiText(label),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )

@@ -26,6 +26,8 @@ import com.santiya.localaihub.repo.RepositoryValidator
 import com.santiya.localaihub.repo.ValidationResult
 import com.santiya.localaihub.service.ModelDownloadService
 import com.santiya.localaihub.hub.ModelCatalogPresentation
+import com.santiya.localaihub.models.enums.PathType
+import com.santiya.localaihub.storage.SharedModelLibrary
 import com.santiya.localaihub.ui.screen.model_store.StoreTab
 import com.santiya.localaihub.utils.ModelMetadataExtractor
 import com.santiya.localaihub.utils.SizeCategory
@@ -622,15 +624,29 @@ class ModelStoreViewModel @Inject constructor(
         viewModelScope.launch {
             _deleteInProgress.value = model.id
             try {
-                // Delete model file if it's in app's internal directory
-                val modelFile = File(model.modelPath)
-                if (modelFile.exists() && modelFile.absolutePath.startsWith(appModelsDir.absolutePath)) {
-                    val deleted = modelFile.delete()
-                    Log.d("ModelStoreViewModel", "Model file deleted: $deleted - ${modelFile.absolutePath}")
+                when (model.pathType) {
+                    PathType.CONTENT_URI -> {
+                        val deleted = SharedModelLibrary.deleteManagedModel(getApplication(), model)
+                        Log.d("ModelStoreViewModel", "Shared model deleted: $deleted - ${model.modelPath}")
+                    }
+                    PathType.FILE, PathType.DIRECTORY -> {
+                        val managedSharedDeleted = if (SharedModelLibrary.isManagedSharedPath(model.modelPath)) {
+                            SharedModelLibrary.deleteManagedModel(getApplication(), model)
+                        } else {
+                            false
+                        }
+                        val modelFile = File(model.modelPath)
+                        if (managedSharedDeleted) {
+                            Log.d("ModelStoreViewModel", "Shared model file deleted: ${model.modelPath}")
+                        } else if (modelFile.exists() && modelFile.absolutePath.startsWith(appModelsDir.absolutePath)) {
+                            val deleted = modelFile.delete()
+                            Log.d("ModelStoreViewModel", "Model file deleted: $deleted - ${modelFile.absolutePath}")
 
-                    // If it's a directory (for SD models), delete recursively
-                    if (modelFile.isDirectory) {
-                        modelFile.deleteRecursively()
+                            // If it's a directory (for SD models), delete recursively
+                            if (modelFile.isDirectory) {
+                                modelFile.deleteRecursively()
+                            }
+                        }
                     }
                 }
 

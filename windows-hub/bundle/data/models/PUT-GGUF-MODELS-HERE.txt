@@ -1,1 +1,0 @@
-Copy your .gguf model files into this folder before starting the Windows Hub.

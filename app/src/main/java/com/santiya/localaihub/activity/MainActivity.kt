@@ -21,6 +21,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.santiya.localaihub.data.AppLanguageSettingsStore
 import com.santiya.localaihub.data.AppSettingsDataStore
 import com.santiya.localaihub.data.SetupDataStore
 import com.santiya.localaihub.data.TermsDataStore
@@ -32,13 +33,17 @@ import com.santiya.localaihub.ui.screen.gate.VaultGateScreen
 import com.santiya.localaihub.ui.screen.developer.DeveloperApiScreen
 import com.santiya.localaihub.ui.screen.files.FilesWorkspaceScreen
 import com.santiya.localaihub.ui.screen.guide.GuideScreen
+import com.santiya.localaihub.ui.screen.guide.LanguageSelectionScreen
 import com.santiya.localaihub.ui.screen.guide.TermsAndConditionsScreen
+import com.santiya.localaihub.ui.screen.apimodels.ApiModelsScreen
+import com.santiya.localaihub.ui.screen.browser.BrowserScreen
 import com.santiya.localaihub.ui.screen.home.HomeScreen
 import com.santiya.localaihub.ui.screen.live.LiveAiScreen
 import com.santiya.localaihub.ui.screen.memory.AiMemoryScreen
 import com.santiya.localaihub.ui.screen.memory.VaultDashboard
 import com.santiya.localaihub.ui.screen.model_config.ModelConfigEditorScreen
 import com.santiya.localaihub.ui.screen.model_store.ModelStoreScreen
+import com.santiya.localaihub.ui.screen.offlinecity.OfflineCityScreen
 import com.santiya.localaihub.ui.screen.settings.SettingsScreen
 import com.santiya.localaihub.ui.screen.setup.ImageGenSetupScreen
 import com.santiya.localaihub.ui.screen.setup.SetupScreen
@@ -88,7 +93,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = this@MainActivity
             val themePreset by remember { AppSettingsDataStore(context).themePreset }
-                .collectAsState(initial = ThemePreset.SYSTEM)
+                .collectAsState(initial = ThemePreset.OBSIDIAN_MONO)
             SantiyaLocalAiHubTheme(themePreset = themePreset) {
 
                 // Compute start destination from onboarding state + installed models
@@ -99,12 +104,17 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) {
                     withContext(Dispatchers.IO) {
                         // Parallelize DataStore reads вЂ” each opens a separate file
-                        val (termsAccepted, setupDone, guideSeen) = coroutineScope {
+                        val state = coroutineScope {
                             val t = async { TermsDataStore(context).hasAcceptedTerms.first() }
                             val s = async { SetupDataStore(context).isSetupDone.first() }
                             val g = async { AppSettingsDataStore(context).guideSeen.first() }
-                            Triple(t.await(), s.await(), g.await())
+                            val l = async { AppLanguageSettingsStore(context).read().hasChosenLanguage }
+                            listOf(t.await(), s.await(), g.await(), l.await())
                         }
+                        val termsAccepted = state[0] as Boolean
+                        val setupDone = state[1] as Boolean
+                        val guideSeen = state[2] as Boolean
+                        val languageChosen = state[3] as Boolean
 
                         // Auto-init vault for returning users (exists on disk but not yet opened)
                         if (!VaultManager.isReady.value && VaultManager.exists(context)) {
@@ -125,13 +135,16 @@ class MainActivity : ComponentActivity() {
                                 val modelRepository = AppContainer.getModelRepository()
                                 val models = modelRepository.getAllModels().first()
                                 models.any {
-                                    it.providerType == ProviderType.GGUF || it.providerType == ProviderType.DIFFUSION
+                                    it.providerType == ProviderType.GGUF ||
+                                        it.providerType == ProviderType.GOOGLE_LOCAL ||
+                                        it.providerType == ProviderType.DIFFUSION
                                 }
                             } catch (_: Exception) { false }
                         } else false
                         hasModelsInstalled = hasModel
 
                         startDestination = when {
+                            !languageChosen -> Screen.Language.route
                             // Returning user: vault ready + terms accepted + (setup done or has model)
                             vaultReady && termsAccepted && (setupDone || hasModel) -> Screen.Chat.route
 
@@ -178,6 +191,7 @@ class MainActivity : ComponentActivity() {
 
 sealed class Screen(val route: String) {
     // Onboarding (flat routes so any can be used as startDestination)
+    object Language : Screen("language")
     object Intro : Screen("intro")
     object Guide : Screen("guide")
     object Migration : Screen("migration")
@@ -191,6 +205,9 @@ sealed class Screen(val route: String) {
     object Settings : Screen("settings")
     object Files : Screen("files")
     object Live : Screen("live")
+    object OfflineCity : Screen("offline_city")
+    object ApiModels : Screen("api_models")
+    object Browser : Screen("browser")
     object DeveloperApi : Screen("developer_api")
     object VaultManager : Screen("vault_manager")
     object AiMemory : Screen("ai_memory")
@@ -241,6 +258,24 @@ fun AppNavigation(
     ) {
 
         // ============ ONBOARDING SCREENS ============
+        composable(Screen.Language.route) {
+            val languageStore = remember { AppLanguageSettingsStore(context) }
+            LanguageSelectionScreen(
+                onRussianSelected = {
+                    languageStore.choose(com.santiya.localaihub.global.AppLanguage.RUSSIAN)
+                    navController.navigate(Screen.Guide.route) {
+                        popUpTo(Screen.Language.route) { inclusive = true }
+                    }
+                },
+                onEnglishSelected = {
+                    languageStore.choose(com.santiya.localaihub.global.AppLanguage.ENGLISH)
+                    navController.navigate(Screen.Guide.route) {
+                        popUpTo(Screen.Language.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+
         composable(Screen.Intro.route) {
             // IntroScreen was removed вЂ” skip straight to Guide or Migration
             LaunchedEffect(Unit) {
@@ -323,6 +358,15 @@ fun AppNavigation(
                 onLiveClick = {
                     navController.navigate(Screen.Live.route)
                 },
+                onOfflineCityClick = {
+                    navController.navigate(Screen.OfflineCity.route)
+                },
+                onApiModelsClick = {
+                    navController.navigate(Screen.ApiModels.route)
+                },
+                onBrowserClick = {
+                    navController.navigate(Screen.Browser.route)
+                },
                 onVaultManagerClick = {
                     navController.navigate(Screen.VaultManager.route)
                 },
@@ -350,7 +394,10 @@ fun AppNavigation(
             SettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onModelEditor = { navController.navigate(Screen.Editor.route) },
-                onAiMemoryClick = { navController.navigate(Screen.AiMemory.route) }
+                onAiMemoryClick = { navController.navigate(Screen.AiMemory.route) },
+                onOfflineCityClick = { navController.navigate(Screen.OfflineCity.route) },
+                onApiModelsClick = { navController.navigate(Screen.ApiModels.route) },
+                onBrowserClick = { navController.navigate(Screen.Browser.route) }
             )
         }
 
@@ -364,6 +411,18 @@ fun AppNavigation(
                 chatViewModel = chatViewModel,
                 llmModelViewModel = llmModelViewModel
             )
+        }
+
+        composable(Screen.OfflineCity.route) {
+            OfflineCityScreen(onNavigateBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.ApiModels.route) {
+            ApiModelsScreen(onNavigateBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.Browser.route) {
+            BrowserScreen(onNavigateBack = { navController.popBackStack() })
         }
 
         composable(Screen.DeveloperApi.route) {

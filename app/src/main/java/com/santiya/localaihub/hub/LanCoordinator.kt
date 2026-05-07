@@ -14,6 +14,10 @@ import com.santiya.localaihub.models.table_schema.Model
 import com.santiya.localaihub.runtime.ModelRegistry
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.security.SecureRandom
 
 class LanCoordinator(private val context: Context) {
@@ -24,6 +28,10 @@ class LanCoordinator(private val context: Context) {
     private val partitionPlanner = DistributedPartitionPlanner()
     private val peerDiscovery = NsdLanDiscoveryService(context)
     private val advertiser = NsdLanAdvertiser(context)
+
+    companion object {
+        const val LAN_SERVER_PORT = NsdLanAdvertiser.DEFAULT_PORT
+    }
 
     fun ensurePairingToken(config: LanHubConfig): LanHubConfig {
         return if (config.pairingToken.isBlank()) {
@@ -62,14 +70,77 @@ class LanCoordinator(private val context: Context) {
         )
     }
 
-    fun nodesJson(models: List<Model>, config: LanHubConfig): String {
-        val nodes = if (config.enabled) {
-            advertiser.start(resourceCollector.snapshot())
-            peerDiscovery.start()
-            listOf(localNode(models, config)) + peerDiscovery.snapshot().map { it.toLanNodeInfo() }
+    fun applyLanRuntime(models: List<Model>, config: LanHubConfig, httpPort: Int = LAN_SERVER_PORT) {
+        val safeConfig = ensurePairingToken(config)
+        if (!safeConfig.enabled) {
+            stopLanRuntime()
+            return
+        }
+        if (safeConfig.advertiseLocalNode) {
+            advertiser.start(resourceCollector.snapshot(), httpPort)
         } else {
             advertiser.stop()
-            peerDiscovery.stop()
+        }
+        peerDiscovery.start()
+    }
+
+    fun stopLanRuntime() {
+        advertiser.stop()
+        peerDiscovery.stop()
+    }
+
+    fun statusJson(models: List<Model>, config: LanHubConfig, httpPort: Int = LAN_SERVER_PORT): String {
+        val safeConfig = ensurePairingToken(config)
+        val snapshot = resourceCollector.snapshot()
+        val supportedModels = models
+            .filter { it.providerType == ProviderType.GGUF }
+            .map { it.id }
+
+        return buildJsonObject {
+            put("ok", true)
+            put("nodeId", snapshot.nodeId)
+            put("displayName", snapshot.displayName)
+            put("platform", snapshot.platform.name.lowercase())
+            put("totalRamMb", snapshot.totalRamMb)
+            put("freeRamMb", snapshot.freeRamMb)
+            put("cpuCores", snapshot.cpuCores)
+            put("cpuArch", snapshot.cpuArch)
+            put("acceleratorSummary", snapshot.acceleratorSummary)
+            put("acceleratorScore", snapshot.acceleratorScore)
+            put("computeScore", snapshot.computeScore)
+            put("availableStorageMb", snapshot.availableStorageMb)
+            put("supportsSequentialOffload", snapshot.supportsSequentialOffload)
+            put("supportsPipelineWorker", snapshot.supportsPipelineWorker)
+            put("heavySlotAvailable", snapshot.heavySlotAvailable)
+            put("lastSeenEpochMs", snapshot.lastSeenEpochMs)
+            put("installedModelCount", models.size)
+            put("httpPort", httpPort)
+            put("pairingRequired", true)
+            putJsonArray("transportProtocols") {
+                snapshot.transportProtocols.forEach { add(JsonPrimitive(it.name.lowercase())) }
+            }
+            putJsonArray("supportedModels") {
+                supportedModels.forEach { add(JsonPrimitive(it)) }
+            }
+            putJsonArray("notes") {
+                snapshot.notes.forEach { add(JsonPrimitive(it)) }
+                add(JsonPrimitive(
+                    if (safeConfig.enabled) {
+                        "LAN node API is live on port $httpPort."
+                    } else {
+                        "LAN node API is disabled."
+                    }
+                ))
+            }
+        }.toString()
+    }
+
+    fun nodesJson(models: List<Model>, config: LanHubConfig): String {
+        val nodes = if (config.enabled) {
+            applyLanRuntime(models, config)
+            listOf(localNode(models, config)) + peerDiscovery.snapshot().map { it.toLanNodeInfo() }
+        } else {
+            stopLanRuntime()
             emptyList()
         }
         return json.encodeToString(nodes)
@@ -98,8 +169,7 @@ class LanCoordinator(private val context: Context) {
                 )
             )
 
-        advertiser.start(resourceCollector.snapshot())
-        peerDiscovery.start()
+        applyLanRuntime(models, safeConfig)
         val plan = partitionPlanner.plan(
             model = profileEstimator.estimate(model),
             localNode = resourceCollector.snapshot(),

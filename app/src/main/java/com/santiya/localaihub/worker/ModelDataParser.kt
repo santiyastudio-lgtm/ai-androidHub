@@ -27,6 +27,7 @@ class ModelDataParser {
     ): ModelLoadResult = withContext(Dispatchers.IO) {
         return@withContext when (model.providerType) {
             ProviderType.GGUF -> loadGGUFModel(model, config)
+            ProviderType.GOOGLE_LOCAL -> loadImportedAssetModel(model, "Google Local модель зарегистрирована. Активация выполняется через системный Google Local runtime.")
             ProviderType.DIFFUSION -> loadDiffusionModel(model, config)
             ProviderType.ONNX -> loadImportedAssetModel(model, "ONNX-модель импортирована. Локальный runtime зависит от поддержанного adapter.")
             ProviderType.TTS_PIPER -> loadImportedAssetModel(model, "Piper voice pack импортирован. Локальная озвучка зависит от runtime-поддержки.")
@@ -414,7 +415,7 @@ class ModelDataParser {
 
         // Hash only the first 4 MB
         val limit = 4L * 1024 * 1024
-        context.contentResolver.openInputStream(uri)?.use { input ->
+        ContentUriIO.openInputStream(context, uri).use { input ->
             val buffer = ByteArray(8 * 1024)
             var remaining = limit
             while (remaining > 0) {
@@ -424,7 +425,7 @@ class ModelDataParser {
                 digest.update(buffer, 0, len)
                 remaining -= len
             }
-        } ?: throw IllegalArgumentException("Cannot open input stream for URI: $uri")
+        }
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
@@ -432,23 +433,14 @@ class ModelDataParser {
      * Get file size from content:// URI
      */
     fun getFileSizeFromUri(context: Context, uri: Uri): Long {
-        return context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-            pfd.statSize
-        } ?: 0L
+        return ContentUriIO.fileSize(context, uri)
     }
 
     /**
      * Get display name from content:// URI
      */
     fun getFileNameFromUri(context: Context, uri: Uri): String {
-        var name = "Unknown Model"
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-            if (cursor.moveToFirst() && nameIndex >= 0) {
-                name = cursor.getString(nameIndex)
-            }
-        }
-        return name
+        return ContentUriIO.displayName(context, uri)
     }
 
     /** Safely close a raw fd obtained via detachFd() */

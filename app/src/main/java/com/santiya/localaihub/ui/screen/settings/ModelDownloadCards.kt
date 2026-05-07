@@ -19,16 +19,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.santiya.localaihub.global.Standards
+import com.santiya.localaihub.global.localizedText
 import com.santiya.localaihub.service.ModelDownloadService
 import com.santiya.localaihub.ui.components.CaptionText
 import com.santiya.localaihub.ui.components.StandardCard
 import com.santiya.localaihub.ui.icons.TnIcons
 import com.santiya.localaihub.ui.theme.Motion
-
-// в”Ђв”Ђ Reusable Download Card в”Ђв”Ђ
 
 @Composable
 internal fun ModelDownloadCard(
@@ -38,6 +38,7 @@ internal fun ModelDownloadCard(
     onDownload: () -> Unit,
     successText: String = "Downloaded"
 ) {
+    val context = LocalContext.current
     StandardCard(title = title) {
         Column(
             modifier = Modifier
@@ -99,7 +100,7 @@ internal fun ModelDownloadCard(
                         color = MaterialTheme.colorScheme.error
                     )
                     FilledTonalButton(onClick = onDownload) {
-                        Text("Retry")
+                        Text(localizedText(context, "Повторить", "Retry"))
                     }
                 }
 
@@ -111,7 +112,7 @@ internal fun ModelDownloadCard(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(Modifier.width(Standards.SpacingSm))
-                        Text("Download")
+                        Text(localizedText(context, "Скачать", "Download"))
                     }
                 }
             }

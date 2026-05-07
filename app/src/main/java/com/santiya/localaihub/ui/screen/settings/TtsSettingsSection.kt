@@ -18,26 +18,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.santiya.localaihub.global.AppLanguage
 import com.santiya.localaihub.global.Standards
+import com.santiya.localaihub.global.localizedText
 import com.santiya.localaihub.service.ModelDownloadService
+import com.santiya.localaihub.tts.TTSSettings
 import com.santiya.localaihub.ui.components.ActionToggleGroup
 import com.santiya.localaihub.ui.components.CaptionText
 import com.santiya.localaihub.ui.components.SectionDivider
 import com.santiya.localaihub.ui.components.SectionHeader
 import com.santiya.localaihub.ui.components.StandardCard
 import com.santiya.localaihub.ui.components.SwitchRow
-import com.santiya.localaihub.tts.TTSSettings
 import com.santiya.localaihub.viewmodel.SettingsViewModel
 import kotlin.math.roundToInt
-
-// в”Ђв”Ђ Constants в”Ђв”Ђ
 
 internal val DEFAULT_VOICES = listOf("F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5")
 internal val SUPPORTED_LANGUAGES = listOf("en" to "EN", "ko" to "KO", "es" to "ES", "pt" to "PT", "fr" to "FR")
 
-// в”Ђв”Ђ TTS Settings Section в”Ђв”Ђ
-
 internal fun LazyListScope.ttsSettingsSection(
+    language: AppLanguage,
     hasTtsModel: Boolean,
     ttsDownloadState: ModelDownloadService.DownloadState?,
     ttsModelLoaded: Boolean,
@@ -48,39 +47,41 @@ internal fun LazyListScope.ttsSettingsSection(
 ) {
     item { Spacer(Modifier.height(Standards.SpacingSm)) }
     item { SectionDivider() }
-    item { SectionHeader(title = "Text-to-Speech") }
+    item { SectionHeader(title = localizedText(language, "Озвучка текста", "Text-to-Speech")) }
 
-    // Download TTS card вЂ” only visible when no TTS model is installed
     if (!hasTtsModel) {
         item {
             ModelDownloadCard(
-                title = "Download TTS",
-                description = "Supertonic v2 В· ~263 MB",
+                title = localizedText(language, "Скачать TTS", "Download TTS"),
+                description = "Supertonic v2 • ~263 MB",
                 downloadState = ttsDownloadState,
                 onDownload = { viewModel.downloadTts() },
-                successText = "Downloaded вЂ” loading model..."
+                successText = localizedText(language, "Скачано — загружаю модель...", "Downloaded — loading model...")
             )
         }
     }
 
     item {
         SwitchRow(
-            title = "Load TTS on App Start",
-            description = "Auto-load TTS model when app launches",
+            title = localizedText(language, "Загружать TTS при запуске", "Load TTS on app start"),
+            description = localizedText(
+                language,
+                "Автоматически загружать модель озвучки при старте приложения",
+                "Auto-load the TTS model when the app launches"
+            ),
             checked = loadTTSOnStart,
             onCheckedChange = { viewModel.setLoadTTSOnStart(it) }
         )
     }
 
-    // Voice picker
     item {
-        StandardCard(title = "Voice") {
+        StandardCard(title = localizedText(language, "Голос", "Voice")) {
             Column(verticalArrangement = Arrangement.spacedBy(Standards.SpacingSm)) {
                 val femaleVoices = voices.filter { it.startsWith("F") }
                 val maleVoices = voices.filter { it.startsWith("M") }
 
                 if (femaleVoices.isNotEmpty()) {
-                    CaptionText(text = "Female")
+                    CaptionText(text = localizedText(language, "Женские", "Female"))
                     ActionToggleGroup(
                         items = femaleVoices,
                         selectedItem = ttsSettings.voice,
@@ -90,7 +91,7 @@ internal fun LazyListScope.ttsSettingsSection(
                     )
                 }
                 if (maleVoices.isNotEmpty()) {
-                    CaptionText(text = "Male")
+                    CaptionText(text = localizedText(language, "Мужские", "Male"))
                     ActionToggleGroup(
                         items = maleVoices,
                         selectedItem = ttsSettings.voice,
@@ -103,9 +104,8 @@ internal fun LazyListScope.ttsSettingsSection(
         }
     }
 
-    // Language selector
     item {
-        StandardCard(title = "Language") {
+        StandardCard(title = localizedText(language, "Язык", "Language")) {
             ActionToggleGroup(
                 items = SUPPORTED_LANGUAGES.map { it.first },
                 selectedItem = ttsSettings.language,
@@ -116,16 +116,15 @@ internal fun LazyListScope.ttsSettingsSection(
         }
     }
 
-    // Speed slider
     item {
-        StandardCard(title = "Speed") {
+        StandardCard(title = localizedText(language, "Скорость", "Speed")) {
             Column(verticalArrangement = Arrangement.spacedBy(Standards.SpacingXs)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    CaptionText(text = "Playback speed")
+                    CaptionText(text = localizedText(language, "Скорость воспроизведения", "Playback speed"))
                     Surface(
                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                         shape = RoundedCornerShape(Standards.SpacingXs)
@@ -163,16 +162,15 @@ internal fun LazyListScope.ttsSettingsSection(
         }
     }
 
-    // Steps slider
     item {
-        StandardCard(title = "Denoising Steps") {
+        StandardCard(title = localizedText(language, "Шаги денойзинга", "Denoising steps")) {
             Column(verticalArrangement = Arrangement.spacedBy(Standards.SpacingXs)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    CaptionText(text = "Higher = better quality, slower")
+                    CaptionText(text = localizedText(language, "Больше — качественнее, но медленнее", "Higher = better quality, slower"))
                     Surface(
                         color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f),
                         shape = RoundedCornerShape(Standards.SpacingXs)
@@ -202,22 +200,20 @@ internal fun LazyListScope.ttsSettingsSection(
         }
     }
 
-    // Auto-speak
     item {
         SwitchRow(
-            title = "Auto-speak",
-            description = "Automatically speak assistant responses",
+            title = localizedText(language, "Автоозвучка", "Auto-speak"),
+            description = localizedText(language, "Автоматически озвучивать ответы ассистента", "Automatically speak assistant responses"),
             checked = ttsSettings.autoSpeak,
             onCheckedChange = { viewModel.updateAutoSpeak(it) },
             enabled = ttsModelLoaded
         )
     }
 
-    // NNAPI
     item {
         SwitchRow(
-            title = "Use NNAPI",
-            description = "Hardware acceleration (may not work on all devices)",
+            title = localizedText(language, "Использовать NNAPI", "Use NNAPI"),
+            description = localizedText(language, "Аппаратное ускорение, которое может работать не на всех устройствах", "Hardware acceleration that may not work on all devices"),
             checked = ttsSettings.useNNAPI,
             onCheckedChange = { viewModel.updateUseNNAPI(it) },
             enabled = ttsModelLoaded

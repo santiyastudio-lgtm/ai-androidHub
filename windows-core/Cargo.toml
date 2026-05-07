@@ -1,0 +1,18 @@
+[package]
+name = "santiya-localai-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "santiya_localai_core_native"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "santiya-localai-core"
+path = "src/main.rs"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 2
+panic = "abort"

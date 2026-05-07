@@ -4,10 +4,14 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.santiya.localaihub.data.AppLanguageSettings
+import com.santiya.localaihub.data.AppLanguageSettingsStore
 import com.santiya.localaihub.data.AppSettingsDataStore
 import com.santiya.localaihub.di.AppContainer
+import com.santiya.localaihub.global.AppLanguage
 import com.santiya.localaihub.global.AccelerationMode
 import com.santiya.localaihub.global.DeviceTuner
 import com.santiya.localaihub.global.HardwareProfile
@@ -16,7 +20,10 @@ import com.santiya.localaihub.global.PerformanceMode
 import com.santiya.localaihub.hub.ExternalAccessPolicy
 import com.santiya.localaihub.hub.LanCoordinator
 import com.santiya.localaihub.hub.LanHubConfig
+import com.santiya.localaihub.hub.LocalBackendOption
 import com.santiya.localaihub.hub.ModelOrchestraManager
+import com.santiya.localaihub.hub.OpenClawLocalSettings
+import com.santiya.localaihub.hub.OpenClawLocalSettingsStore
 import com.santiya.localaihub.hub.OrchestraCapabilityState
 import com.santiya.localaihub.hub.OrchestraConfig
 import com.santiya.localaihub.hub.PreferredModelMap
@@ -25,11 +32,19 @@ import com.santiya.localaihub.models.engine_schema.GgufEngineSchema
 import com.santiya.localaihub.models.enums.ProviderType
 import com.santiya.localaihub.models.table_schema.Model
 import com.santiya.localaihub.plugins.PluginManager
+import com.santiya.localaihub.service.LLMService
 import com.santiya.localaihub.service.ModelDownloadService
 import com.santiya.localaihub.state.AppStateManager
+import com.santiya.localaihub.support.SupportReportBundle
+import com.santiya.localaihub.support.SupportReportManager
+import com.santiya.localaihub.support.SupportReportRequest
 import com.santiya.localaihub.tts.TTSDataStore
 import com.santiya.localaihub.tts.TTSManager
 import com.santiya.localaihub.tts.TTSSettings
+import com.santiya.localaihub.tts.VoiceRuntimeOption
+import com.santiya.localaihub.tts.VoiceRuntimeSettings
+import com.santiya.localaihub.tts.VoiceRuntimeSettingsStore
+import com.santiya.localaihub.ui.screen.memory.VaultLogger
 import com.santiya.localaihub.worker.DiffusionBackendSelector
 import com.santiya.localaihub.worker.DiffusionConfig
 import com.santiya.localaihub.worker.SystemBackupManager
@@ -55,10 +70,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val profileJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     private val appSettingsDataStore = AppSettingsDataStore(application)
+    private val appLanguageSettingsStore = AppLanguageSettingsStore(application)
     private val ttsDataStore = TTSDataStore(application)
+    private val openClawLocalSettingsStore = OpenClawLocalSettingsStore(application)
+    private val voiceRuntimeSettingsStore = VoiceRuntimeSettingsStore(application)
     private val orchestraManager = ModelOrchestraManager(application)
     private val lanCoordinator = LanCoordinator(application)
     private val modelStoreRepository = com.santiya.localaihub.repo.ModelStoreRepository(application)
+    private val supportReportManager = SupportReportManager(application)
 
     private val modelRepository = AppContainer.getModelRepository()
 
@@ -123,7 +142,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
     val themePreset: StateFlow<ThemePreset> = appSettingsDataStore.themePreset
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ThemePreset.SYSTEM)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ThemePreset.OBSIDIAN_MONO)
 
     val preferredModels: StateFlow<PreferredModelMap> = appSettingsDataStore.preferredModels
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), PreferredModelMap())
@@ -136,6 +155,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     val lanHubConfig: StateFlow<LanHubConfig> = appSettingsDataStore.lanHubConfig
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LanHubConfig())
+
+    private val _appLanguageSettings = MutableStateFlow(appLanguageSettingsStore.read())
+    val appLanguageSettings: StateFlow<AppLanguageSettings> = _appLanguageSettings
+
+    private val _openClawLocalSettings = MutableStateFlow(openClawLocalSettingsStore.read())
+    val openClawLocalSettings: StateFlow<OpenClawLocalSettings> = _openClawLocalSettings
+
+    private val _voiceRuntimeSettings = MutableStateFlow(voiceRuntimeSettingsStore.read())
+    val voiceRuntimeSettings: StateFlow<VoiceRuntimeSettings> = _voiceRuntimeSettings
 
     // Hardware tuning
     val hardwareTuningEnabled: StateFlow<Boolean> = appSettingsDataStore.hardwareTuningEnabled
@@ -253,6 +281,106 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun setAppLanguage(language: AppLanguage) {
+        val updated = AppLanguageSettings(language = language, hasChosenLanguage = true)
+        appLanguageSettingsStore.write(updated)
+        _appLanguageSettings.value = updated
+    }
+
+    fun setOpenClawBackend(backend: LocalBackendOption) {
+        val updated = _openClawLocalSettings.value.copy(defaultBackend = backend)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun setOpenClawAutoUseRecommendedModel(enabled: Boolean) {
+        val updated = _openClawLocalSettings.value.copy(autoUseRecommendedModel = enabled)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun setOpenClawPreferProjector(enabled: Boolean) {
+        val updated = _openClawLocalSettings.value.copy(preferMultimodalProjector = enabled)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun setOpenClawShowAdvancedBackends(enabled: Boolean) {
+        val updated = _openClawLocalSettings.value.copy(showAdvancedBackends = enabled)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun setOpenClawEnabledByDefault(enabled: Boolean) {
+        val updated = _openClawLocalSettings.value.copy(enabledByDefault = enabled)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun setOpenClawPreferredModel(modelId: String?) {
+        val updated = _openClawLocalSettings.value.copy(preferredOpenClawModelId = modelId)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun toggleOpenClawSkill(skillId: String) {
+        val current = _openClawLocalSettings.value
+        val updatedSkills = if (skillId in current.selectedSkillIds) {
+            current.selectedSkillIds - skillId
+        } else {
+            current.selectedSkillIds + skillId
+        }
+        val updated = current.copy(selectedSkillIds = updatedSkills)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun toggleOpenClawApiTool(apiToolId: String) {
+        val current = _openClawLocalSettings.value
+        val updatedTools = if (apiToolId in current.selectedApiToolIds) {
+            current.selectedApiToolIds - apiToolId
+        } else {
+            current.selectedApiToolIds + apiToolId
+        }
+        val updated = current.copy(selectedApiToolIds = updatedTools)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun setVoiceRuntimeOption(option: VoiceRuntimeOption) {
+        val updated = _voiceRuntimeSettings.value.copy(selectedRuntime = option)
+        voiceRuntimeSettingsStore.write(updated)
+        _voiceRuntimeSettings.value = updated
+    }
+
+    fun setVoiceFallbackToLocal(enabled: Boolean) {
+        val updated = _voiceRuntimeSettings.value.copy(fallbackToLocal = enabled)
+        voiceRuntimeSettingsStore.write(updated)
+        _voiceRuntimeSettings.value = updated
+    }
+
+    fun setVoicePreferClonedVoice(enabled: Boolean) {
+        val updated = _voiceRuntimeSettings.value.copy(preferClonedVoice = enabled)
+        voiceRuntimeSettingsStore.write(updated)
+        _voiceRuntimeSettings.value = updated
+    }
+
+    fun updateGptSovitsNodeUrl(url: String) {
+        val updated = _voiceRuntimeSettings.value.copy(
+            gptSovitsNode = _voiceRuntimeSettings.value.gptSovitsNode.copy(url = url)
+        )
+        voiceRuntimeSettingsStore.write(updated)
+        _voiceRuntimeSettings.value = updated
+    }
+
+    fun updateXttsAllTalkNodeUrl(url: String) {
+        val updated = _voiceRuntimeSettings.value.copy(
+            xttsAllTalkNode = _voiceRuntimeSettings.value.xttsAllTalkNode.copy(url = url)
+        )
+        voiceRuntimeSettingsStore.write(updated)
+        _voiceRuntimeSettings.value = updated
+    }
+
     fun setExternalAccessEnabled(enabled: Boolean) {
         viewModelScope.launch {
             val current = appSettingsDataStore.externalAccessPolicySnapshot()
@@ -294,6 +422,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             appSettingsDataStore.saveLanHubConfig(
                 lanCoordinator.ensurePairingToken(current.copy(enabled = enabled))
             )
+            if (enabled) {
+                ensureHubServiceRunning()
+            }
         }
     }
 
@@ -303,6 +434,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             appSettingsDataStore.saveLanHubConfig(
                 lanCoordinator.ensurePairingToken(current.copy(advertiseLocalNode = enabled))
             )
+            if (current.enabled) {
+                ensureHubServiceRunning()
+            }
         }
     }
 
@@ -312,7 +446,17 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             appSettingsDataStore.saveLanHubConfig(
                 lanCoordinator.ensurePairingToken(current.copy(pairingToken = ""))
             )
+            if (current.enabled) {
+                ensureHubServiceRunning()
+            }
         }
+    }
+
+    private fun ensureHubServiceRunning() {
+        val intent = Intent(getApplication(), LLMService::class.java).apply {
+            action = LLMService.ACTION_WAKE_HUB
+        }
+        ContextCompat.startForegroundService(getApplication(), intent)
     }
 
     fun setOrchestraEnabled(enabled: Boolean) {
@@ -521,6 +665,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _backupSizeEstimate = MutableStateFlow<SystemBackupManager.BackupSizeEstimate?>(null)
     val backupSizeEstimate: StateFlow<SystemBackupManager.BackupSizeEstimate?> = _backupSizeEstimate
 
+    private val _supportReportState = MutableStateFlow<SupportReportState>(SupportReportState.Idle)
+    val supportReportState: StateFlow<SupportReportState> = _supportReportState
+
     fun updateBackupOptions(options: SystemBackupManager.BackupOptions) {
         _backupOptions.value = options
         estimateBackupSize(options)
@@ -567,4 +714,44 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun clearBackupProgress() {
         _backupProgress.value = null
     }
+
+    fun prepareSupportReport(userComment: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _supportReportState.value = SupportReportState.Preparing
+            runCatching {
+                supportReportManager.prepare(
+                    SupportReportRequest(
+                        userComment = userComment,
+                        language = _appLanguageSettings.value.language,
+                        openClawBackend = _openClawLocalSettings.value.defaultBackend,
+                        voiceRuntime = _voiceRuntimeSettings.value.selectedRuntime,
+                        streamingEnabled = streamingEnabled.value,
+                        chatMemoryEnabled = chatMemoryEnabled.value,
+                        performanceMode = performanceMode.value.name,
+                        accelerationMode = accelerationMode.value.name,
+                        installedModels = modelRepository.getAllModels().first(),
+                        vaultLogs = VaultLogger.logs.value
+                    )
+                )
+            }.onSuccess { bundle ->
+                _supportReportState.value = SupportReportState.Ready(bundle)
+            }.onFailure { error ->
+                Log.e("SettingsVM", "Support report preparation failed", error)
+                _supportReportState.value = SupportReportState.Error(
+                    error.message ?: "Failed to prepare support report"
+                )
+            }
+        }
+    }
+
+    fun clearSupportReportState() {
+        _supportReportState.value = SupportReportState.Idle
+    }
+}
+
+sealed interface SupportReportState {
+    data object Idle : SupportReportState
+    data object Preparing : SupportReportState
+    data class Ready(val bundle: SupportReportBundle) : SupportReportState
+    data class Error(val message: String) : SupportReportState
 }

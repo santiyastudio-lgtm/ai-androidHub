@@ -76,6 +76,10 @@ class ModelConfigEditorViewModel @Inject constructor() : ViewModel() {
                         }
                     }
 
+                    ProviderType.GOOGLE_LOCAL -> {
+                        _ggufConfig.value = GgufEngineSchema()
+                    }
+
                     ProviderType.DIFFUSION -> {
                         _diffusionConfig.value = if (config != null) {
                             DiffusionConfig.fromJson(config.modelLoadingParams)
@@ -124,6 +128,15 @@ class ModelConfigEditorViewModel @Inject constructor() : ViewModel() {
                             modelId = model.id,
                             modelLoadingParams = _ggufConfig.value.toLoadingJson(),
                             modelInferenceParams = _ggufConfig.value.toInferenceJson()
+                        )
+                    }
+
+                    ProviderType.GOOGLE_LOCAL -> {
+                        ModelConfig(
+                            id = existingConfig?.id ?: "",
+                            modelId = model.id,
+                            modelLoadingParams = existingConfig?.modelLoadingParams ?: """{"type":"google_local","runtime":"aicore"}""",
+                            modelInferenceParams = existingConfig?.modelInferenceParams ?: """{"type":"chat","runtime":"google_local"}"""
                         )
                     }
 

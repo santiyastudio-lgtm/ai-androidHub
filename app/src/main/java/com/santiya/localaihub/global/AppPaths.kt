@@ -87,6 +87,15 @@ object AppPaths {
     fun workspaceFiles(context: Context): File =
         File(context.filesDir, "workspace_files").also { it.mkdirs() }
 
+    fun offlineCityRoot(context: Context): File =
+        File(context.filesDir, "offline_city").also { it.mkdirs() }
+
+    fun offlineCityImports(context: Context): File =
+        File(offlineCityRoot(context), "imports").also { it.mkdirs() }
+
+    fun offlineCityDataset(context: Context): File =
+        File(offlineCityRoot(context), "active_city_dataset.json")
+
     // в”Ђв”Ђ Image Tools в”Ђв”Ђ
 
     /** Image tool model weights (upscaler, segmenter, lama, depth, style) */

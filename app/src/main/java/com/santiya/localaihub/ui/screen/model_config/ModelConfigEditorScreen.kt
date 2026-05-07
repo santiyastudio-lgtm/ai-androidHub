@@ -254,6 +254,7 @@ private fun ModelListItem(
             Icon(
                 imageVector = when (model.providerType) {
                     ProviderType.GGUF -> TnIcons.FileText
+                    ProviderType.GOOGLE_LOCAL -> TnIcons.Sparkles
                     ProviderType.DIFFUSION -> TnIcons.Photo
                     ProviderType.TTS, ProviderType.TTS_PIPER -> TnIcons.Volume
                     ProviderType.ONNX -> TnIcons.Eye
@@ -333,6 +334,12 @@ private fun ConfigEditorPanel(
             item {
                 when (model.providerType) {
                     ProviderType.GGUF -> GgufConfigEditor(viewModel)
+                    ProviderType.GOOGLE_LOCAL -> {
+                        Text(
+                            "Google Local использует системный runtime. Здесь доступна только базовая регистрация модели и выбор по умолчанию.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     ProviderType.DIFFUSION -> DiffusionConfigEditor(viewModel)
                     ProviderType.TTS,
                     ProviderType.TTS_PIPER,

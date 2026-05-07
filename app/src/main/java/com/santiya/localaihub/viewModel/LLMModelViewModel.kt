@@ -1,60 +1,73 @@
 package com.santiya.localaihub.viewmodel
 
 import android.app.Application
-import android.net.Uri
 import android.util.Log
+import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.santiya.localaihub.data.ActiveModelActivationState
+import com.santiya.localaihub.data.ActiveModelInstallStage
+import com.santiya.localaihub.data.ActiveModelState
 import com.santiya.localaihub.data.AppSettingsDataStore
 import com.santiya.localaihub.data.VaultManager
 import com.santiya.localaihub.di.AppContainer
+import com.santiya.localaihub.global.AppPaths
+import com.santiya.localaihub.hub.OpenClawLocalSettingsStore
 import com.santiya.localaihub.models.enums.PathType
 import com.santiya.localaihub.models.enums.ProviderType
 import com.santiya.localaihub.models.table_schema.Model
 import com.santiya.localaihub.models.table_schema.ModelConfig
 import com.santiya.localaihub.repo.ModelStoreRepository
 import com.santiya.localaihub.state.AppStateManager
+import com.santiya.localaihub.storage.SharedModelLibrary
 import com.santiya.localaihub.worker.DiffusionBackendSelector
 import com.santiya.localaihub.worker.DiffusionConfig
-import com.santiya.localaihub.worker.DiffusionInferenceParams
+import com.santiya.localaihub.worker.GgufProbeGuard
+import com.santiya.localaihub.worker.GgufRuntimeSupport
+import com.santiya.localaihub.worker.GoogleLocalSupport
 import com.santiya.localaihub.worker.LlmModelWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import androidx.core.net.toUri
-import com.santiya.localaihub.global.AppPaths
-import java.io.File
 
 @HiltViewModel
 class LLMModelViewModel @Inject constructor(
     application: Application
 ) : AndroidViewModel(application) {
+    companion object {
+        private const val TAG = "LLMModelVM"
+    }
 
     private val appSettings = AppSettingsDataStore(application)
     private val modelStoreRepository = ModelStoreRepository(application)
+    private val openClawSettingsStore = OpenClawLocalSettingsStore(application)
 
-    // Deferred until vault is ready
     private val repository get() = AppContainer.getModelRepository()
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val installedModels: Flow<List<Model>> = VaultManager.isReady
         .flatMapLatest { ready ->
-            if (ready) repository.getAllModels()
-            else flowOf(emptyList())
+            if (ready) repository.getAllModels() else flowOf(emptyList())
         }
         .map { models ->
             models.filter { model ->
-                model.providerType == ProviderType.GGUF || model.providerType == ProviderType.DIFFUSION
+                model.providerType == ProviderType.GGUF ||
+                    model.providerType == ProviderType.GOOGLE_LOCAL ||
+                    model.providerType == ProviderType.DIFFUSION
             }
         }
 
@@ -63,14 +76,16 @@ class LLMModelViewModel @Inject constructor(
 
     private val _currentModelType = MutableStateFlow<ProviderType?>(null)
 
-    // Last loaded model вЂ” shown once on startup to offer reloading
+    private val _activeModelState = MutableStateFlow(ActiveModelState())
+    val activeModelState: StateFlow<ActiveModelState> = _activeModelState.asStateFlow()
+    val currentModelName: StateFlow<String?> = activeModelState
+        .map { it.modelName }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     private val _lastModelOffer = MutableStateFlow<Model?>(null)
     val lastModelOffer: StateFlow<Model?> = _lastModelOffer.asStateFlow()
 
-    // в”Ђв”Ђ QNN Runtime Setup Gate в”Ђв”Ђ
-
     private val _pendingDiffusionModel = MutableStateFlow<Model?>(null)
-
     private val _needsQnnSetup = MutableStateFlow(false)
     val needsQnnSetup: StateFlow<Boolean> = _needsQnnSetup.asStateFlow()
 
@@ -96,13 +111,24 @@ class LLMModelViewModel @Inject constructor(
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            val savedId = appSettings.lastModelId.first() ?: return@launch
-            // Only offer if no model is currently loaded
+            val persisted = appSettings.activeModelStateSnapshot()
+            if (persisted.hasSelection) {
+                _activeModelState.value = persisted
+                _currentModelID.value = persisted.modelId.orEmpty()
+                _currentModelType.value = persisted.providerTypeName?.let { runCatching { ProviderType.valueOf(it) }.getOrNull() }
+                if (persisted.installStage == ActiveModelInstallStage.ACTIVATED && !persisted.modelName.isNullOrBlank()) {
+                    AppStateManager.setModelLoaded(persisted.modelName)
+                }
+            }
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val savedId = appSettings.lastModelId.first()
+                ?: openClawSettingsStore.read().takeIf { it.enabledByDefault }?.preferredOpenClawModelId
+                ?: return@launch
             if (_currentModelID.value.isNotEmpty()) return@launch
             val model = repository.getModelById(savedId) ?: return@launch
             if (!model.isActive) return@launch
-            // Wait for the LLM service to be ready before showing the dialog,
-            // so clicking "Load" starts instantly instead of blocking on service bind
             try {
                 LlmModelWorker.ensureServiceReady()
             } catch (_: Exception) {
@@ -111,13 +137,12 @@ class LLMModelViewModel @Inject constructor(
 
             val askDialog = appSettings.askModelReloadDialog.first()
             if (askDialog) {
-                _lastModelOffer.value = model  // show dialog
+                _lastModelOffer.value = model
             } else {
-                loadModel(model)  // auto-load silently
+                loadModel(model)
             }
         }
 
-        // Watch for performance mode reload requests
         viewModelScope.launch {
             AppStateManager.reloadModelRequested.collect { requested ->
                 if (requested && _currentModelID.value.isNotEmpty()) {
@@ -126,6 +151,79 @@ class LLMModelViewModel @Inject constructor(
                 }
             }
         }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            combine(
+                LlmModelWorker.currentGgufModelId,
+                LlmModelWorker.currentGoogleLocalModelId,
+                LlmModelWorker.currentDiffusionModelId,
+            ) { ggufId, googleId, diffusionId ->
+                when {
+                    googleId != null -> googleId to ProviderType.GOOGLE_LOCAL
+                    ggufId != null -> ggufId to ProviderType.GGUF
+                    diffusionId != null -> diffusionId to ProviderType.DIFFUSION
+                    else -> null
+                }
+            }.collect { active ->
+                if (active == null) {
+                    val persisted = _activeModelState.value
+                    if (persisted.installStage == ActiveModelInstallStage.ACTIVATED) {
+                        setActiveModelState(
+                            persisted.copy(
+                                installStage = ActiveModelInstallStage.SELECTED,
+                                activationState = ActiveModelActivationState.IDLE,
+                                activationReason = null,
+                            )
+                        )
+                    } else {
+                        _currentModelType.value = null
+                    }
+                } else {
+                    val model = repository.getModelById(active.first)
+                    setActiveModelState(
+                        ActiveModelState(
+                            modelId = active.first,
+                            modelName = model?.modelName ?: _activeModelState.value.modelName,
+                            providerTypeName = active.second.name,
+                            installStage = ActiveModelInstallStage.ACTIVATED,
+                            activationState = ActiveModelActivationState.ACTIVE,
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun setActiveModelState(state: ActiveModelState) {
+        _activeModelState.value = state
+        _currentModelID.value = state.modelId.orEmpty()
+        _currentModelType.value = state.providerTypeName?.let { runCatching { ProviderType.valueOf(it) }.getOrNull() }
+        appSettings.saveActiveModelState(state)
+        when {
+            state.installStage == ActiveModelInstallStage.ACTIVATED && !state.modelName.isNullOrBlank() -> {
+                AppStateManager.setModelLoaded(state.modelName)
+            }
+            !state.hasSelection -> AppStateManager.setModelUnloaded()
+        }
+    }
+
+    private suspend fun setBlockedState(
+        model: Model,
+        providerType: ProviderType = model.providerType,
+        reason: String,
+        stage: ActiveModelInstallStage = ActiveModelInstallStage.INDEXED,
+    ) {
+        setActiveModelState(
+            ActiveModelState(
+                modelId = model.id,
+                modelName = model.modelName,
+                providerTypeName = providerType.name,
+                installStage = stage,
+                activationState = ActiveModelActivationState.BLOCKED,
+                activationReason = reason,
+            )
+        )
+        AppStateManager.setError(reason)
     }
 
     fun dismissLastModelOffer() {
@@ -138,16 +236,14 @@ class LLMModelViewModel @Inject constructor(
         loadModel(model)
     }
 
-    // Model loading states
     val isGgufModelLoaded = LlmModelWorker.isGgufModelLoaded
+    val isGoogleLocalModelLoaded = LlmModelWorker.isGoogleLocalModelLoaded
     val isDiffusionModelLoaded = LlmModelWorker.isDiffusionModelLoaded
 
-    suspend fun getModelConfig(modelId: String): ModelConfig? {
-        return repository.getConfigByModelId(modelId)
-    }
+    suspend fun getModelConfig(modelId: String): ModelConfig? = repository.getConfigByModelId(modelId)
 
     fun loadModel(model: Model) {
-        // Gate: DIFFUSION models require QNN runtime to be extracted first
+        Log.i(TAG, "loadModel requested: id=${model.id}, name=${model.modelName}, provider=${model.providerType}, path=${model.modelPath}")
         if (model.providerType == ProviderType.DIFFUSION && !isQnnRuntimeReady()) {
             _pendingDiffusionModel.value = model
             _needsQnnSetup.value = true
@@ -156,8 +252,17 @@ class LLMModelViewModel @Inject constructor(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Unload any existing model first
-                if (_currentModelID.value.isNotEmpty()) {
+                setActiveModelState(
+                    ActiveModelState(
+                        modelId = model.id,
+                        modelName = model.modelName,
+                        providerTypeName = model.providerType.name,
+                        installStage = ActiveModelInstallStage.SELECTED,
+                        activationState = ActiveModelActivationState.IDLE,
+                    )
+                )
+
+                if (_currentModelID.value.isNotEmpty() && _currentModelID.value != model.id) {
                     unloadCurrentModel()
                     delay(300)
                 }
@@ -166,67 +271,144 @@ class LLMModelViewModel @Inject constructor(
 
                 val config = getModelConfig(model.id)
                 if (config == null) {
-                    AppStateManager.setError("Model configuration not found")
+                    setBlockedState(model, reason = "Не найдена конфигурация модели.", stage = ActiveModelInstallStage.IMPORTED)
                     return@launch
                 }
 
                 when (model.providerType) {
                     ProviderType.GGUF -> loadGgufModel(model, config)
+                    ProviderType.GOOGLE_LOCAL -> loadGoogleLocalModel(model)
                     ProviderType.DIFFUSION -> loadDiffusionModel(model, config)
                     ProviderType.TTS,
                     ProviderType.TTS_PIPER,
                     ProviderType.ONNX,
                     ProviderType.RAW_ASSET -> {
-                        AppStateManager.setError("Эта модель импортирована, но не подключена к основному chat runtime.")
+                        setBlockedState(
+                            model = model,
+                            reason = "Эта модель импортирована, но не подключена к основному chat runtime."
+                        )
                     }
                 }
             } catch (e: Exception) {
-                AppStateManager.setError(e.message ?: "Unknown error")
+                Log.e(TAG, "loadModel failed for ${model.id}: ${e.message}", e)
+                setBlockedState(model, reason = e.message ?: "Unknown error")
             }
         }
     }
 
     private suspend fun loadGgufModel(model: Model, config: ModelConfig) {
-        val success = if (model.pathType == PathType.CONTENT_URI) {
-            // Use FD-based loading for content:// URIs (SAF)
-            val uri = model.modelPath.toUri()
+        var effectiveModel = model
+        if (model.pathType == PathType.FILE) {
+            val healed = SharedModelLibrary.resolveManagedRuntimeModel(getApplication(), model)
+            if (healed != null && healed.modelPath != model.modelPath) {
+                Log.i(TAG, "Healed GGUF model path: old=${model.modelPath}, new=${healed.modelPath}")
+                runCatching { AppContainer.getModelRepository().updateModel(healed) }
+                    .onFailure { Log.w(TAG, "Failed to persist healed GGUF path: ${it.message}") }
+                effectiveModel = healed
+            }
+        }
+
+        Log.i(TAG, "loadGgufModel start: id=${effectiveModel.id}, pathType=${effectiveModel.pathType}, path=${effectiveModel.modelPath}")
+        if (GoogleLocalSupport.shouldPreferForGemma(getApplication(), effectiveModel.id, effectiveModel.modelName)) {
+            Log.i(TAG, "Redirecting ${effectiveModel.modelName} to Google Local runtime")
+            loadGoogleLocalModel(effectiveModel)
+            return
+        }
+
+        if (effectiveModel.pathType != PathType.CONTENT_URI) {
+            val runtimeFile = File(effectiveModel.modelPath)
+            val compatibility = GgufRuntimeSupport.inspect(runtimeFile)
+            if (!compatibility.supported) {
+                setBlockedState(
+                    model = effectiveModel,
+                    providerType = ProviderType.GGUF,
+                    reason = compatibility.message
+                        ?: GgufRuntimeSupport.unsupportedArchitectureMessage(compatibility.architecture)
+                )
+                return
+            }
+            val probeVerdict = GgufProbeGuard.evaluate(getApplication(), runtimeFile)
+            if (!probeVerdict.canProbeNow) {
+                setBlockedState(
+                    model = effectiveModel,
+                    providerType = ProviderType.GGUF,
+                    reason = probeVerdict.message ?: "Недостаточно памяти для безопасной загрузки GGUF-модели."
+                )
+                return
+            }
+            Log.i(TAG, "GGUF compatibility ok: arch=${compatibility.architecture}, backend=${compatibility.backend}")
+        }
+
+        val success = if (effectiveModel.pathType == PathType.CONTENT_URI) {
+            val uri = effectiveModel.modelPath.toUri()
             LlmModelWorker.loadGgufModelFromUri(
                 context = getApplication(),
                 uri = uri,
-                modelName = model.modelName,
+                modelName = effectiveModel.modelName,
                 modelConfig = config
             )
         } else {
-            // Use path-based loading for regular file paths
-            LlmModelWorker.loadGgufModel(model, config)
+            LlmModelWorker.loadGgufModel(effectiveModel, config)
         }
 
         if (success) {
-            LlmModelWorker.setCurrentGgufModelId(model.id)
-            _currentModelID.value = model.id
-            _currentModelType.value = ProviderType.GGUF
-            AppStateManager.setModelLoaded(model.modelName)
-            appSettings.saveLastModelId(model.id)
+            LlmModelWorker.setCurrentGgufModelId(effectiveModel.id)
+            setActiveModelState(
+                ActiveModelState(
+                    modelId = effectiveModel.id,
+                    modelName = effectiveModel.modelName,
+                    providerTypeName = ProviderType.GGUF.name,
+                    installStage = ActiveModelInstallStage.ACTIVATED,
+                    activationState = ActiveModelActivationState.ACTIVE,
+                )
+            )
+            appSettings.saveLastModelId(effectiveModel.id)
 
-            // Wire optimizations after model load
             try {
-                val cacheDir = AppPaths.promptCache(getApplication<android.app.Application>())
-                    .also { it.mkdirs() }
+                val cacheDir = AppPaths.promptCache(getApplication<Application>()).also { it.mkdirs() }
                 LlmModelWorker.setPromptCacheDirGguf(cacheDir.absolutePath)
-                // Speculative decoding disabled вЂ” causes KV cache position mismatch on some models
-                // TODO: re-enable once native engine position tracking is fixed
                 LlmModelWorker.setSpeculativeDecodingGguf(false)
                 LlmModelWorker.warmUpGguf()
             } catch (e: Exception) {
-                android.util.Log.w("LLMModelVM", "Optimization wiring failed: ${e.message}")
+                Log.w(TAG, "Optimization wiring failed: ${e.message}")
             }
 
-            // Update tool calling model state and sync tools
             val nativeSupports = LlmModelWorker.isToolCallingSupportedGguf()
             com.santiya.localaihub.plugins.PluginManager.setToolCallingModelLoaded(nativeSupports)
             com.santiya.localaihub.plugins.PluginManager.syncToolsWithLLM()
         } else {
-            AppStateManager.setError("Failed to load GGUF model")
+            setBlockedState(
+                model = effectiveModel,
+                providerType = ProviderType.GGUF,
+                reason = "Не удалось активировать GGUF-модель."
+            )
+        }
+    }
+
+    private suspend fun loadGoogleLocalModel(model: Model) {
+        val descriptor = GoogleLocalSupport.buildGemmaDescriptor(model.id, model.modelName)
+        val success = LlmModelWorker.loadGoogleLocalModel(getApplication(), descriptor)
+        if (success) {
+            LlmModelWorker.setCurrentGoogleLocalModelId(model.id)
+            LlmModelWorker.setCurrentGgufModelId(null)
+            setActiveModelState(
+                ActiveModelState(
+                    modelId = model.id,
+                    modelName = model.modelName,
+                    providerTypeName = ProviderType.GOOGLE_LOCAL.name,
+                    installStage = ActiveModelInstallStage.ACTIVATED,
+                    activationState = ActiveModelActivationState.ACTIVE,
+                )
+            )
+            appSettings.saveLastModelId(model.id)
+            com.santiya.localaihub.plugins.PluginManager.setToolCallingModelLoaded(false)
+            com.santiya.localaihub.plugins.PluginManager.syncToolsWithLLM()
+        } else {
+            setBlockedState(
+                model = model,
+                providerType = ProviderType.GOOGLE_LOCAL,
+                reason = "Не удалось активировать Google Local для ${model.modelName}."
+            )
         }
     }
 
@@ -244,9 +426,7 @@ class LLMModelViewModel @Inject constructor(
         )
 
         if (diffusionConfig != storedConfig) {
-            repository.updateConfig(
-                config.copy(modelLoadingParams = diffusionConfig.toJson())
-            )
+            repository.updateConfig(config.copy(modelLoadingParams = diffusionConfig.toJson()))
         }
 
         val success = LlmModelWorker.loadDiffusionModel(
@@ -264,15 +444,20 @@ class LLMModelViewModel @Inject constructor(
 
         if (success) {
             LlmModelWorker.setCurrentDiffusionModelId(model.id)
-            _currentModelID.value = model.id
-            _currentModelType.value = ProviderType.DIFFUSION
-            AppStateManager.setModelLoaded(model.modelName)
+            setActiveModelState(
+                ActiveModelState(
+                    modelId = model.id,
+                    modelName = model.modelName,
+                    providerTypeName = ProviderType.DIFFUSION.name,
+                    installStage = ActiveModelInstallStage.ACTIVATED,
+                    activationState = ActiveModelActivationState.ACTIVE,
+                )
+            )
             appSettings.saveLastModelId(model.id)
         } else {
-            AppStateManager.setError("Failed to load Diffusion model")
+            setBlockedState(model, providerType = ProviderType.DIFFUSION, reason = "Не удалось загрузить diffusion-модель.")
         }
     }
-
 
     private suspend fun unloadCurrentModel() {
         try {
@@ -281,21 +466,22 @@ class LLMModelViewModel @Inject constructor(
                     LlmModelWorker.unloadGgufModel()
                     LlmModelWorker.setCurrentGgufModelId(null)
                 }
+                ProviderType.GOOGLE_LOCAL -> {
+                    LlmModelWorker.unloadGoogleLocalModel()
+                    LlmModelWorker.setCurrentGoogleLocalModelId(null)
+                }
                 ProviderType.DIFFUSION -> {
                     LlmModelWorker.stopDiffusionBackend()
                     LlmModelWorker.setCurrentDiffusionModelId(null)
                 }
-                else -> {}
+                else -> Unit
             }
-
-            _currentModelID.value = ""
-            _currentModelType.value = null
+            setActiveModelState(ActiveModelState())
             com.santiya.localaihub.plugins.PluginManager.setToolCallingModelLoaded(false)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "unloadCurrentModel failed: ${e.message}", e)
         }
     }
-
 
     fun unloadModel() {
         viewModelScope.launch {
@@ -305,15 +491,17 @@ class LLMModelViewModel @Inject constructor(
                         LlmModelWorker.unloadGgufModel()
                         LlmModelWorker.setCurrentGgufModelId(null)
                     }
+                    ProviderType.GOOGLE_LOCAL -> {
+                        LlmModelWorker.unloadGoogleLocalModel()
+                        LlmModelWorker.setCurrentGoogleLocalModelId(null)
+                    }
                     ProviderType.DIFFUSION -> {
                         LlmModelWorker.stopDiffusionBackend()
                         LlmModelWorker.setCurrentDiffusionModelId(null)
                     }
-                    else -> {}
+                    else -> Unit
                 }
-
-                _currentModelID.value = ""
-                _currentModelType.value = null
+                setActiveModelState(ActiveModelState())
                 AppStateManager.setModelUnloaded()
             } catch (e: Exception) {
                 AppStateManager.setError(e.message ?: "Failed to unload model")
@@ -321,69 +509,67 @@ class LLMModelViewModel @Inject constructor(
         }
     }
 
-    // в”Ђв”Ђ Runtime Reload в”Ђв”Ђ
-
     fun reloadCurrentModel() {
         val modelId = _currentModelID.value
         if (modelId.isEmpty()) return
-
         viewModelScope.launch(Dispatchers.IO) {
             val model = repository.getModelById(modelId) ?: return@launch
             loadModel(model)
         }
     }
 
-    /**
-     * Delete a model from the database and optionally from disk.
-     * If the model is currently loaded, it will be unloaded first.
-     */
     fun deleteModel(model: Model, deleteFile: Boolean = true) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Unload if this is the currently loaded model
                 if (_currentModelID.value == model.id) {
                     unloadCurrentModel()
                     delay(300)
                 }
 
-                // Clear LAST_MODEL_ID if this model is the saved one
                 try {
                     val lastModelId = appSettings.lastModelId.first()
                     if (lastModelId == model.id) {
                         appSettings.saveLastModelId(null)
                     }
                 } catch (e: Exception) {
-                    Log.e("LLMModelVM", "Failed to clear last model ID: ${e.message}")
+                    Log.e(TAG, "Failed to clear last model ID: ${e.message}")
                 }
 
-                // Delete associated config
                 val config = repository.getConfigByModelId(model.id)
                 if (config != null) {
                     repository.deleteConfig(config)
                 }
 
-                // Delete model file from disk if requested
-                if (deleteFile && model.pathType != PathType.CONTENT_URI) {
+                if (deleteFile) {
                     try {
-                        val modelFile = java.io.File(model.modelPath)
-                        if (modelFile.exists()) {
-                            if (modelFile.isDirectory) {
-                                modelFile.deleteRecursively()
-                            } else {
-                                modelFile.delete()
+                        when (model.pathType) {
+                            PathType.CONTENT_URI -> {
+                                val deleted = SharedModelLibrary.deleteManagedModel(getApplication(), model)
+                                Log.d(TAG, "Deleted shared model file: $deleted - ${model.modelPath}")
                             }
-                            Log.d("LLMModelVM", "Deleted model file: ${model.modelPath}")
+                            PathType.FILE, PathType.DIRECTORY -> {
+                                val modelFile = File(model.modelPath)
+                                if (SharedModelLibrary.isManagedSharedPath(model.modelPath)) {
+                                    val deleted = SharedModelLibrary.deleteManagedModel(getApplication(), model)
+                                    Log.d(TAG, "Deleted shared model file: $deleted - ${model.modelPath}")
+                                } else if (modelFile.exists()) {
+                                    if (modelFile.isDirectory) modelFile.deleteRecursively() else modelFile.delete()
+                                    Log.d(TAG, "Deleted model file: ${model.modelPath}")
+                                }
+                            }
                         }
                     } catch (e: Exception) {
-                        Log.e("LLMModelVM", "Failed to delete model file: ${e.message}")
+                        Log.e(TAG, "Failed to delete model file: ${e.message}")
                     }
                 }
 
-                // Delete from database
                 repository.deleteModel(model)
-                Log.d("LLMModelVM", "Model deleted: ${model.modelName}")
+                if (_activeModelState.value.modelId == model.id) {
+                    setActiveModelState(ActiveModelState())
+                }
+                Log.d(TAG, "Model deleted: ${model.modelName}")
             } catch (e: Exception) {
-                Log.e("LLMModelVM", "Failed to delete model: ${e.message}")
+                Log.e(TAG, "Failed to delete model: ${e.message}")
                 AppStateManager.setError("Failed to delete model: ${e.message}")
             }
         }
