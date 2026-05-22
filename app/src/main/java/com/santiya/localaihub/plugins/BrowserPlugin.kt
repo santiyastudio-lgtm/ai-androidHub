@@ -1,9 +1,9 @@
 package com.santiya.localaihub.plugins
 
-import android.util.Patterns
 import androidx.compose.runtime.Composable
 import com.santiya.localaihub.browser.BrowserCommand
 import com.santiya.localaihub.browser.BrowserToolState
+import com.santiya.localaihub.browser.BrowserUrlPolicy
 import com.santiya.localaihub.models.plugins.PluginInfo
 import com.santiya.localaihub.plugins.api.SuperPlugin
 import com.dark.gguf_lib.toolcalling.ToolCall
@@ -43,10 +43,7 @@ class BrowserPlugin : SuperPlugin {
             when (toolCall.name) {
                 TOOL_OPEN_URL -> {
                     val rawUrl = toolCall.getString("url").trim()
-                    val normalized = normalizeUrl(rawUrl)
-                    require(Patterns.WEB_URL.matcher(normalized).matches()) {
-                        "Invalid browser URL: $rawUrl"
-                    }
+                    val normalized = BrowserUrlPolicy.normalize(rawUrl)
                     BrowserToolState.openUrl(normalized)
                     browserPayload(
                         action = "open",
@@ -117,10 +114,5 @@ class BrowserPlugin : SuperPlugin {
                 put("canGoForward", it.canGoForward)
             }
         }
-    }
-
-    private fun normalizeUrl(rawUrl: String): String {
-        if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) return rawUrl
-        return "https://$rawUrl"
     }
 }

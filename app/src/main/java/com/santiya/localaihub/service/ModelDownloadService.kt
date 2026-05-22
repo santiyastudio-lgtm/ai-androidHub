@@ -360,6 +360,7 @@ class ModelDownloadService : Service() {
                                 providerType = when (modelType) {
                                     "TTS_PIPER" -> ProviderType.TTS_PIPER
                                     "ONNX" -> ProviderType.ONNX
+                                    "AIRLLM", "AIRLLM_REMOTE" -> ProviderType.AIRLLM_REMOTE
                                     else -> ProviderType.RAW_ASSET
                                 },
                                 fileSize = when {
@@ -805,6 +806,7 @@ class ModelDownloadService : Service() {
             "TTS" -> ProviderType.TTS
             "TTS_PIPER" -> ProviderType.TTS_PIPER
             "ONNX" -> ProviderType.ONNX
+            "AIRLLM", "AIRLLM_REMOTE" -> ProviderType.AIRLLM_REMOTE
             "RAW_ASSET", "IMAGE_TOOL" -> ProviderType.RAW_ASSET
             else -> ProviderType.GGUF
         }
@@ -868,6 +870,14 @@ class ModelDownloadService : Service() {
                     modelId = normalizedModel.id,
                     modelLoadingParams = """{"type":"google_local","runtime":"aicore"}""",
                     modelInferenceParams = """{"type":"chat","runtime":"google_local"}"""
+                )
+            }
+
+            ProviderType.AIRLLM_REMOTE -> {
+                ModelConfig(
+                    modelId = normalizedModel.id,
+                    modelLoadingParams = """{"type":"airllm_remote","runtime":"python_gateway","endpoint":"http://127.0.0.1:8765"}""",
+                    modelInferenceParams = """{"type":"chat","runtime":"airllm_gateway"}"""
                 )
             }
 

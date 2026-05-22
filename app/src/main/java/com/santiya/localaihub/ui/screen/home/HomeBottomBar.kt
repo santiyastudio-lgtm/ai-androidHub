@@ -32,6 +32,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,9 +48,13 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.santiya.localaihub.activity.RagActivity
+import com.santiya.localaihub.data.ActiveModelActivationState
+import com.santiya.localaihub.data.ActiveModelInstallStage
 import com.santiya.localaihub.global.Standards
 import com.santiya.localaihub.global.localizedText
 import com.santiya.localaihub.models.ModelType
+import com.santiya.localaihub.models.state.AppState
+import com.santiya.localaihub.state.AppStateManager
 import com.santiya.localaihub.ui.components.ActionButton
 import com.santiya.localaihub.ui.components.ActionProgressButton
 import com.santiya.localaihub.ui.components.MemoryOverlayBottomSheet
@@ -101,10 +106,28 @@ internal fun BottomBar(
     }
 
     val currentModelID by llmModelViewModel.currentModelID.collectAsStateWithLifecycle()
+    val activeModelState by llmModelViewModel.activeModelState.collectAsStateWithLifecycle()
+    val appState by AppStateManager.appState.collectAsStateWithLifecycle()
     val chatState by chatViewModel.chatUiState.collectAsStateWithLifecycle()
     val isTextModelLoaded by chatViewModel.isTextModelLoaded.collectAsStateWithLifecycle()
     val isImageModelLoaded by chatViewModel.isImageModelLoaded.collectAsStateWithLifecycle()
-    val isModelLoaded = currentModelID.isNotBlank() || isTextModelLoaded
+    val hasActiveSelection =
+        activeModelState.hasSelection &&
+            activeModelState.activationState == ActiveModelActivationState.ACTIVE
+    val appStateHasLoadedModel = when (val state = appState) {
+        is AppState.ModelLoaded,
+        is AppState.LoadingModel,
+        is AppState.GeneratingText,
+        is AppState.GeneratingImage,
+        is AppState.GeneratingAudio -> true
+        is AppState.Error -> !state.modelName.isNullOrBlank()
+        else -> false
+    }
+    val textModeAvailable = isTextModelLoaded || hasActiveSelection || appStateHasLoadedModel
+    val isModelLoaded =
+        currentModelID.isNotBlank() ||
+            textModeAvailable ||
+            activeModelState.installStage == ActiveModelInstallStage.ACTIVATED
 
     val loadedRags by ragViewModel.loadedRags.collectAsStateWithLifecycle()
     val isRagEnabledForChat by ragViewModel.isRagEnabledForChat.collectAsStateWithLifecycle()
@@ -123,6 +146,12 @@ internal fun BottomBar(
     val memoryResults by memoryViewModel.memoryResults.collectAsStateWithLifecycle()
     val vaultStats by memoryViewModel.vaultStats.collectAsStateWithLifecycle()
     val memoryEntryCount by memoryViewModel.memoryEntryCount.collectAsStateWithLifecycle()
+
+    LaunchedEffect(isModelLoaded) {
+        if (isModelLoaded) {
+            showModelRequiredHint = false
+        }
+    }
 
     PluginOverlayBottomSheet(
         show = showPluginOverlay,
@@ -480,7 +509,7 @@ internal fun BottomBar(
                                     if (isImageMode) chatViewModel.switchToImageGeneration()
                                     else chatViewModel.switchToTextGeneration()
                                 },
-                                textModelLoaded = isTextModelLoaded,
+                                textModelLoaded = textModeAvailable,
                                 imageModelLoaded = isImageModelLoaded
                             )
 

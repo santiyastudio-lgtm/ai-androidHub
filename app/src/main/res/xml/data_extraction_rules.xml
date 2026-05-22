@@ -3,11 +3,21 @@
     <cloud-backup>
         <exclude domain="database" path="." />
         <exclude domain="file" path="vault" />
+        <exclude domain="file" path="memory_vault" />
         <exclude domain="file" path="models" />
         <exclude domain="file" path="ums" />
+        <exclude domain="file" path="workspace_files" />
+        <exclude domain="file" path="offline_city" />
+        <exclude domain="file" path="agent_projects" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="." />
         <exclude domain="file" path="vault" />
+        <exclude domain="file" path="memory_vault" />
+        <exclude domain="file" path="models" />
+        <exclude domain="file" path="ums" />
+        <exclude domain="file" path="workspace_files" />
+        <exclude domain="file" path="offline_city" />
+        <exclude domain="file" path="agent_projects" />
     </device-transfer>
 </data-extraction-rules>

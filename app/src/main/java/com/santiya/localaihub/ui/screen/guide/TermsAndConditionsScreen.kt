@@ -61,7 +61,7 @@ fun TermsAndConditionsScreen(
                 TermsCard(
                     title = localizedText("1. Ответы и контент", "1. Responses and content"),
                     content = localizedText(
-                        "Hub может генерировать текст, изображения, голос и другой контент. Он может ошибаться и не должен быть единственным источником истины.",
+                        "Хаб может генерировать текст, изображения, голос и другой контент. Он может ошибаться и не должен быть единственным источником истины.",
                         "The hub can generate text, images, speech, and other content. It can be wrong and should not be your only source of truth."
                     )
                 )
@@ -82,7 +82,7 @@ fun TermsAndConditionsScreen(
                 TermsCard(
                     title = localizedText("4. Внешние модели", "4. External models"),
                     content = localizedText(
-                        "Внешние модели и raw assets могут вести себя непредсказуемо. Подходящая карточка в каталоге не гарантирует запуск на конкретном устройстве.",
+                        "Внешние модели и raw assets могут вести себя непредсказуемо. Карточка в каталоге не гарантирует запуск на конкретном устройстве.",
                         "External models and raw assets can behave unpredictably. A catalog card does not guarantee successful execution on a specific device."
                     )
                 )

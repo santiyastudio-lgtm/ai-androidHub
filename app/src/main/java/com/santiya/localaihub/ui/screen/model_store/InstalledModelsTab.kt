@@ -164,6 +164,7 @@ internal fun InstalledModelCard(
                 imageVector = when (model.providerType) {
                     ProviderType.GGUF -> TnIcons.Sparkles
                     ProviderType.GOOGLE_LOCAL -> TnIcons.Sparkles
+                    ProviderType.AIRLLM_REMOTE -> TnIcons.Sparkles
                     ProviderType.DIFFUSION -> TnIcons.Photo
                     ProviderType.TTS, ProviderType.TTS_PIPER -> TnIcons.Volume
                     ProviderType.ONNX -> TnIcons.Eye
@@ -195,6 +196,7 @@ internal fun InstalledModelCard(
                             val sizeFormatted = formatBytes(sizeBytes)
                             val typeLabel = when (model.providerType) {
                                 ProviderType.GOOGLE_LOCAL -> "Google Local"
+                                ProviderType.AIRLLM_REMOTE -> "AirLLM"
                                 ProviderType.DIFFUSION -> "SD"
                                 ProviderType.TTS_PIPER -> "Piper RU"
                                 ProviderType.RAW_ASSET -> "Raw asset"
@@ -280,6 +282,7 @@ internal fun ModelDetailsDialog(
                     ProviderType.DIFFUSION -> "Stable Diffusion"
                     ProviderType.GGUF -> "GGUF (LLM)"
                     ProviderType.GOOGLE_LOCAL -> "Google Local"
+                    ProviderType.AIRLLM_REMOTE -> "AirLLM Gateway"
                     ProviderType.TTS -> "Text-to-Speech"
                     ProviderType.TTS_PIPER -> "Piper RU Voice"
                     ProviderType.ONNX -> "ONNX Vision"
@@ -371,6 +374,17 @@ internal fun ModelDetailsDialog(
                             DetailRow("Runtime", "Google Local")
                             DetailRow("Execution", "System local runtime")
                             DetailRow("Activation", "Managed automatically")
+                        }
+
+                        ProviderType.AIRLLM_REMOTE -> {
+                            Text(
+                                text = "AirLLM Gateway Config",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            DetailRow("Runtime", "Python/PyTorch gateway")
+                            DetailRow("Endpoint", "Configured in OpenClaw settings")
+                            DetailRow("Scope", "Localhost / private LAN")
                         }
 
                         ProviderType.DIFFUSION -> {

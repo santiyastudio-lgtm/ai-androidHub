@@ -554,7 +554,7 @@ fun ConnectedNodeCard(
                     shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
-                        "${edge.type.name} вЂў ${(edge.weight * 100).toInt()}%",
+                        "${edge.type.name} • ${(edge.weight * 100).toInt()}%",
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                         color = MaterialTheme.colorScheme.primary,

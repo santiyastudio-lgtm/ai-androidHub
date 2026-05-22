@@ -2,6 +2,8 @@ package com.santiya.localaihub.ui.screen.browser
 
 import android.annotation.SuppressLint
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Arrangement
@@ -21,11 +23,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.ui.unit.dp
 import com.santiya.localaihub.browser.BrowserCommand
 import com.santiya.localaihub.browser.BrowserToolState
+import com.santiya.localaihub.browser.BrowserUrlPolicy
 import com.santiya.localaihub.global.Standards
 import com.santiya.localaihub.global.localizedText
 import com.santiya.localaihub.ui.components.ActionButton
@@ -38,7 +41,7 @@ fun BrowserScreen(
     onNavigateBack: () -> Unit,
 ) {
     val state by BrowserToolState.state.collectAsStateWithLifecycle()
-    val initialUrl = state.currentUrl ?: "https://www.google.com"
+    val initialUrl = BrowserUrlPolicy.normalizeOrNull(state.currentUrl) ?: "https://www.google.com"
     val webViewHolder = remember { arrayOfNulls<WebView>(1) }
 
     LaunchedEffect(state.pendingCommandToken) {
@@ -118,11 +121,24 @@ fun BrowserScreen(
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.loadsImagesAutomatically = true
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
+                        settings.javaScriptCanOpenWindowsAutomatically = false
+                        settings.setSupportMultipleWindows(false)
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        settings.safeBrowsingEnabled = true
                         webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): Boolean {
+                                return BrowserUrlPolicy.normalizeOrNull(request?.url?.toString()) == null
+                            }
+
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
                                 BrowserToolState.updatePageState(
-                                    url = url,
+                                    url = BrowserUrlPolicy.normalizeOrNull(url),
                                     title = view?.title,
                                     canGoBack = view?.canGoBack() == true,
                                     canGoForward = view?.canGoForward() == true
@@ -133,7 +149,7 @@ fun BrowserScreen(
                             override fun onReceivedTitle(view: WebView?, title: String?) {
                                 super.onReceivedTitle(view, title)
                                 BrowserToolState.updatePageState(
-                                    url = view?.url,
+                                    url = BrowserUrlPolicy.normalizeOrNull(view?.url),
                                     title = title,
                                     canGoBack = view?.canGoBack() == true,
                                     canGoForward = view?.canGoForward() == true
@@ -145,7 +161,7 @@ fun BrowserScreen(
                 },
                 update = { webView ->
                     webViewHolder[0] = webView
-                    val desiredUrl = state.currentUrl
+                    val desiredUrl = BrowserUrlPolicy.normalizeOrNull(state.currentUrl)
                     if (!desiredUrl.isNullOrBlank() && desiredUrl != webView.url) {
                         webView.loadUrl(desiredUrl)
                     }

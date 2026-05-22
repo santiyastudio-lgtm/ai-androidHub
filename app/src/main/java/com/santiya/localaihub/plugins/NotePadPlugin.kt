@@ -151,7 +151,7 @@ class NotePadPlugin : SuperPlugin {
         } else {
             keys.joinToString("\n") { key ->
                 val preview = notes[key]?.take(50) ?: ""
-                "вЂў $key: ${preview}${if ((notes[key]?.length ?: 0) > 50) "вЂ¦" else ""}"
+                "• $key: ${preview}${if ((notes[key]?.length ?: 0) > 50) "…" else ""}"
             }
         }
 

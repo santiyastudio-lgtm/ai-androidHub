@@ -88,7 +88,7 @@ fun AgentExecutionView(
 
                     if (phase != AgentPhase.Complete && phase != AgentPhase.Idle) {
                         Text(
-                            text = "вЂў",
+                            text = "•",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )
@@ -104,7 +104,7 @@ fun AgentExecutionView(
                         )
                     } else if (steps.isNotEmpty()) {
                         Text(
-                            text = "вЂў",
+                            text = "•",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )

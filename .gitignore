@@ -49,3 +49,6 @@ hs_err_pid*.log
 /keystore/
 /windows-hub/build-log.txt
 /windows-hub/build-running-log.txt
+/official-site/node_modules/
+/official-site/dist/
+/official-site/.codex-qa/

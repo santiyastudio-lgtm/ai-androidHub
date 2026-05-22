@@ -1,4 +1,4 @@
-package com.santiya.localaihub.ui.screen.settings
+﻿package com.santiya.localaihub.ui.screen.settings
 
 import android.app.Activity
 import androidx.compose.foundation.layout.Arrangement
@@ -100,7 +100,7 @@ fun SettingsScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        localizedText("Настройки", "Settings"),
+                        localizedText("РќР°СЃС‚СЂРѕР№РєРё", "Settings"),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -109,7 +109,7 @@ fun SettingsScreen(
                     ActionButton(
                         onClickListener = onNavigateBack,
                         icon = TnIcons.ArrowLeft,
-                        contentDescription = localizedText("Назад", "Back"),
+                        contentDescription = localizedText("РќР°Р·Р°Рґ", "Back"),
                     )
                 }
             )
@@ -130,18 +130,18 @@ fun SettingsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = Standards.SpacingSm),
-                        label = { Text(localizedText("Поиск по настройкам", "Search settings")) },
+                        label = { Text(localizedText("РџРѕРёСЃРє РїРѕ РЅР°СЃС‚СЂРѕР№РєР°Рј", "Search settings")) },
                         singleLine = true,
                     )
                 }
             }
 
-            if (settingsMatches(settingsQuery, "support", "donate", "project", "поддерж", "донат")) {
+            if (settingsMatches(settingsQuery, "support", "donate", "project", "РїРѕРґРґРµСЂР¶РєР°", "РґРѕРЅР°С‚")) {
                 item { CleanSupportQuickSection() }
                 item { DonateQuickSection() }
             }
 
-            if (settingsMatches(settingsQuery, "язык", "language", "localization")) {
+            if (settingsMatches(settingsQuery, "СЏР·С‹Рє", "language", "localization")) {
                 languageSection(
                     settings = appLanguageSettings,
                     onSelect = {
@@ -155,7 +155,7 @@ fun SettingsScreen(
                 apiModelsSection(appLanguageSettings.language, onApiModelsClick)
             }
 
-            if (settingsMatches(settingsQuery, "openclaw", "локал", "local", "backend", "gemma", "оркестр", "agent", "skills")) {
+            if (settingsMatches(settingsQuery, "openclaw", "Р»РѕРєР°Р»", "local", "backend", "gemma", "РѕСЂРєРµСЃС‚СЂ", "agent", "skills", "termux", "browser", "airllm", "hf", "large models", "gateway", "official", "openclaw gateway")) {
                 openClawLocalSection(
                     language = appLanguageSettings.language,
                     settings = openClawLocalSettings,
@@ -165,13 +165,18 @@ fun SettingsScreen(
                     onPreferredModelSelected = { viewModel.setOpenClawPreferredModel(it) },
                     onSkillToggle = { viewModel.toggleOpenClawSkill(it) },
                     onApiToolToggle = { viewModel.toggleOpenClawApiTool(it) },
+                    onAirLlmEndpointChange = { viewModel.setOpenClawAirLlmEndpoint(it) },
+                    onAirLlmModelIdChange = { viewModel.setOpenClawAirLlmModelId(it) },
+                    onOfficialGatewayEndpointChange = { viewModel.setOpenClawOfficialGatewayEndpoint(it) },
+                    onOfficialGatewayTokenChange = { viewModel.setOpenClawOfficialGatewayToken(it) },
+                    onOfficialGatewayModelIdChange = { viewModel.setOpenClawOfficialGatewayModelId(it) },
                     onAutoUseRecommendedChange = { viewModel.setOpenClawAutoUseRecommendedModel(it) },
                     onPreferProjectorChange = { viewModel.setOpenClawPreferProjector(it) },
                     onShowAdvancedBackendsChange = { viewModel.setOpenClawShowAdvancedBackends(it) }
                 )
             }
 
-            if (settingsMatches(settingsQuery, "voice", "tts", "голос", "silero", "piper", "xtts", "sovits")) {
+            if (settingsMatches(settingsQuery, "voice", "tts", "РіРѕР»РѕСЃ", "silero", "piper", "xtts", "sovits")) {
                 voiceRuntimeSection(
                     language = appLanguageSettings.language,
                     settings = voiceRuntimeSettings,
@@ -183,14 +188,14 @@ fun SettingsScreen(
                 )
             }
 
-            if (settingsMatches(settingsQuery, "offline", "город", "city", "map", "bus", "карта", "travel")) {
+            if (settingsMatches(settingsQuery, "offline", "РіРѕСЂРѕРґ", "city", "map", "bus", "РєР°СЂС‚Р°", "travel")) {
                 offlineAgentSection(
                     language = appLanguageSettings.language,
                     onOpenOfflineCity = onOfflineCityClick,
                 )
             }
 
-            if (settingsMatches(settingsQuery, "general", "общие", "tool", "plugin")) {
+            if (settingsMatches(settingsQuery, "general", "РѕР±С‰РёРµ", "tool", "plugin")) {
                 generalSettingsSection(
                     toolCallingEnabled = toolCallingEnabled,
                     toolCallingBypassEnabled = toolCallingBypassEnabled,
@@ -200,23 +205,23 @@ fun SettingsScreen(
                 )
             }
 
-            if (settingsMatches(settingsQuery, "theme", "mono", "тема", "оформление")) {
+            if (settingsMatches(settingsQuery, "theme", "mono", "С‚РµРјР°", "РѕС„РѕСЂРјР»РµРЅРёРµ")) {
                 themeSettingsSection(themePreset = themePreset, viewModel = viewModel)
             }
 
-            if (settingsMatches(settingsQuery, "preferred", "models", "модели", "selector")) {
+            if (settingsMatches(settingsQuery, "preferred", "models", "РјРѕРґРµР»Рё", "selector")) {
                 preferredModelsSection(installedModels = installedModels, preferredModels = preferredModels, viewModel = viewModel)
             }
 
-            if (settingsMatches(settingsQuery, "lan", "node", "узел", "hub")) {
+            if (settingsMatches(settingsQuery, "lan", "node", "СѓР·РµР»", "hub")) {
                 lanSection(lanHubConfig = lanHubConfig, lanNodesJson = lanNodesJson, viewModel = viewModel)
             }
 
-            if (settingsMatches(settingsQuery, "orchestra", "оркестр")) {
+            if (settingsMatches(settingsQuery, "orchestra", "РѕСЂРєРµСЃС‚СЂ")) {
                 orchestraSection(orchestraConfig = orchestraConfig, orchestraCapabilityState = orchestraCapabilityState, viewModel = viewModel)
             }
 
-            if (settingsMatches(settingsQuery, "llm", "stream", "chat", "memory", "reload", "чат")) {
+            if (settingsMatches(settingsQuery, "llm", "stream", "chat", "memory", "reload", "С‡Р°С‚")) {
                 llmSettingsSection(
                     streamingEnabled = streamingEnabled,
                     chatMemoryEnabled = chatMemoryEnabled,
@@ -225,11 +230,11 @@ fun SettingsScreen(
                 )
             }
 
-            if (settingsMatches(settingsQuery, "highlight", "code", "код")) {
+            if (settingsMatches(settingsQuery, "highlight", "code", "РєРѕРґ")) {
                 chatSettingsSection(codeHighlightEnabled = codeHighlightEnabled, viewModel = viewModel)
             }
 
-            if (settingsMatches(settingsQuery, "hardware", "performance", "acceleration", "железо", "cpu", "gpu")) {
+            if (settingsMatches(settingsQuery, "hardware", "performance", "acceleration", "Р¶РµР»РµР·Рѕ", "cpu", "gpu")) {
                 hardwareTuningSection(
                     hardwareTuningEnabled = hardwareTuningEnabled,
                     performanceMode = performanceMode,
@@ -247,7 +252,7 @@ fun SettingsScreen(
                 )
             }
 
-            if (settingsMatches(settingsQuery, "vault", "memory", "память")) {
+            if (settingsMatches(settingsQuery, "vault", "memory", "РїР°РјСЏС‚СЊ")) {
                 aiMemorySection(
                     aiMemoryEnabled = aiMemoryEnabled,
                     onAiMemoryClick = onAiMemoryClick,
@@ -255,7 +260,7 @@ fun SettingsScreen(
                 )
             }
 
-            if (settingsMatches(settingsQuery, "tts", "voice", "silero", "piper", "голос")) {
+            if (settingsMatches(settingsQuery, "tts", "voice", "silero", "piper", "РіРѕР»РѕСЃ")) {
                 ttsSettingsSection(
                     language = appLanguageSettings.language,
                     hasTtsModel = hasTtsModel,
@@ -268,18 +273,18 @@ fun SettingsScreen(
                 )
             }
 
-            if (settingsMatches(settingsQuery, "image", "blur", "картин", "генерация")) {
+            if (settingsMatches(settingsQuery, "image", "blur", "РєР°СЂС‚РёРЅ", "РіРµРЅРµСЂР°С†РёСЏ")) {
                 imageGenerationSection(imageBlurEnabled = imageBlurEnabled, viewModel = viewModel)
             }
 
-            if (settingsMatches(settingsQuery, "backup", "restore", "support", "donate", "данные", "лог")) {
+            if (settingsMatches(settingsQuery, "backup", "restore", "support", "donate", "РґР°РЅРЅС‹Рµ", "Р»РѕРі")) {
                 item { Spacer(Modifier.height(Standards.SpacingSm)) }
                 item { SectionDivider() }
-                item { SectionHeader(title = localizedText("Управление данными", "Data management")) }
+                item { SectionHeader(title = localizedText("РЈРїСЂР°РІР»РµРЅРёРµ РґР°РЅРЅС‹РјРё", "Data management")) }
                 item { DataManagementSection(viewModel = viewModel) }
             }
 
-            if (settingsMatches(settingsQuery, "about", "version", "о приложении", "версия")) {
+            if (settingsMatches(settingsQuery, "about", "version", "Рѕ РїСЂРёР»РѕР¶РµРЅРёРё", "РІРµСЂСЃРёСЏ")) {
                 aboutSection(appVersion = viewModel.appVersion)
             }
 
@@ -296,3 +301,5 @@ private fun settingsMatches(query: String, vararg keywords: String): Boolean {
         lowered.contains(normalized) || normalized.contains(lowered)
     }
 }
+
+

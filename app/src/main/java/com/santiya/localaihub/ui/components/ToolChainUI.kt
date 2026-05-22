@@ -83,7 +83,7 @@ fun ToolChainDisplay(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "вЂў",
+                        text = "•",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )
@@ -94,7 +94,7 @@ fun ToolChainDisplay(
                     )
                     if (isLive && currentRound > 0) {
                         Text(
-                            text = "вЂў",
+                            text = "•",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )

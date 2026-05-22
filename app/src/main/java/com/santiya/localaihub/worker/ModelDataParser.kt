@@ -28,6 +28,7 @@ class ModelDataParser {
         return@withContext when (model.providerType) {
             ProviderType.GGUF -> loadGGUFModel(model, config)
             ProviderType.GOOGLE_LOCAL -> loadImportedAssetModel(model, "Google Local модель зарегистрирована. Активация выполняется через системный Google Local runtime.")
+            ProviderType.AIRLLM_REMOTE -> loadImportedAssetModel(model, "AirLLM gateway model registered. Generation runs through a local/private-LAN Python/PyTorch gateway.")
             ProviderType.DIFFUSION -> loadDiffusionModel(model, config)
             ProviderType.ONNX -> loadImportedAssetModel(model, "ONNX-модель импортирована. Локальный runtime зависит от поддержанного adapter.")
             ProviderType.TTS_PIPER -> loadImportedAssetModel(model, "Piper voice pack импортирован. Локальная озвучка зависит от runtime-поддержки.")

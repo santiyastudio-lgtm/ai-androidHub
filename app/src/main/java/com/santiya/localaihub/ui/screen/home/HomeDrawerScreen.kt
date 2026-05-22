@@ -258,7 +258,7 @@ private fun ChatListItem(
                 )
 
                 Text(
-                    text = "вЂў",
+                    text = "•",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -270,7 +270,7 @@ private fun ChatListItem(
                 )
 
                 Text(
-                    text = "вЂў",
+                    text = "•",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

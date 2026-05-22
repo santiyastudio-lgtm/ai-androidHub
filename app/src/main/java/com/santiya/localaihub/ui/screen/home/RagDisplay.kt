@@ -68,7 +68,7 @@ internal fun RagResultsDisplay(
                     )
 
                     Text(
-                        text = "вЂў",
+                        text = "•",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )
@@ -240,7 +240,7 @@ internal fun SavedRagResultsDisplay(
                     )
 
                     Text(
-                        text = "вЂў",
+                        text = "•",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )

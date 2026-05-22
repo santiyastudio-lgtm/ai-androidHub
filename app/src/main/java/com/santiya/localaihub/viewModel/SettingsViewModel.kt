@@ -323,6 +323,36 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         _openClawLocalSettings.value = updated
     }
 
+    fun setOpenClawAirLlmEndpoint(endpoint: String) {
+        val updated = _openClawLocalSettings.value.copy(airLlmEndpoint = endpoint)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun setOpenClawAirLlmModelId(modelId: String) {
+        val updated = _openClawLocalSettings.value.copy(airLlmModelId = modelId)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun setOpenClawOfficialGatewayEndpoint(endpoint: String) {
+        val updated = _openClawLocalSettings.value.copy(officialGatewayEndpoint = endpoint)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun setOpenClawOfficialGatewayToken(token: String) {
+        val updated = _openClawLocalSettings.value.copy(officialGatewayToken = token)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
+    fun setOpenClawOfficialGatewayModelId(modelId: String) {
+        val updated = _openClawLocalSettings.value.copy(officialGatewayModelId = modelId)
+        openClawLocalSettingsStore.write(updated)
+        _openClawLocalSettings.value = updated
+    }
+
     fun toggleOpenClawSkill(skillId: String) {
         val current = _openClawLocalSettings.value
         val updatedSkills = if (skillId in current.selectedSkillIds) {

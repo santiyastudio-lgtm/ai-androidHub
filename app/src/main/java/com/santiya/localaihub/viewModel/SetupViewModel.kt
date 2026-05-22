@@ -6,6 +6,9 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.santiya.localaihub.data.ActiveModelActivationState
+import com.santiya.localaihub.data.ActiveModelInstallStage
+import com.santiya.localaihub.data.ActiveModelState
 import com.santiya.localaihub.data.AppSettingsDataStore
 import com.santiya.localaihub.data.SetupDataStore
 import com.santiya.localaihub.data.VaultManager
@@ -17,9 +20,9 @@ import com.santiya.localaihub.models.data.HuggingFaceModel
 import com.santiya.localaihub.models.data.ModelType
 import com.santiya.localaihub.models.enums.ProviderType
 import com.santiya.localaihub.global.PerformanceMode
-import com.santiya.localaihub.hub.OpenClawCatalog
 import com.santiya.localaihub.models.table_schema.Model
 import com.santiya.localaihub.models.table_schema.ModelConfig
+import com.santiya.localaihub.plugins.PluginManager
 import com.santiya.localaihub.repo.ModelStoreRepository
 import com.santiya.localaihub.service.ModelDownloadService
 import com.santiya.localaihub.storage.SharedModelLibrary
@@ -70,17 +73,9 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
 
     // ==================== Setup Model Definitions ====================
 
-    private val textModel = HuggingFaceModel(
-        id = OpenClawCatalog.RECOMMENDED_MODEL_ID,
-        name = "Gemma 4 E2B Uncensored Aggressive Q4_K_P",
-        description = "Primary recommended OpenClaw Local model.",
-        fileUri = "${OpenClawCatalog.RECOMMENDED_REPO}/resolve/main/${OpenClawCatalog.RECOMMENDED_MODEL_FILE}",
-        approximateSize = "3.3 GB",
-        modelType = ModelType.GGUF,
-        isZip = false,
-        tags = listOf("GGUF", "Q4_K_P", "Uncensored"),
-        requiresNPU = false,
-        repositoryUrl = OpenClawCatalog.RECOMMENDED_REPO
+    private val textModel = PluginManager.TOOL_CALLING_MODEL.copy(
+        description = "Starter local chat model for the first launch flow.",
+        approximateSize = "400 MB"
     )
 
     private val ttsModel = HuggingFaceModel(
@@ -301,6 +296,37 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
     fun confirmPerformanceMode() {
         viewModelScope.launch {
             appSettingsDataStore.savePerformanceMode(_selectedPerformanceMode.value)
+            val primaryModelId = _primaryModelId.value
+            val selectedOption = _selectedOption.value
+            if (!primaryModelId.isNullOrBlank()) {
+                when (selectedOption) {
+                    SetupOption.TEXT, SetupOption.TEXT_TTS -> {
+                        val preferred = appSettingsDataStore.preferredModelsSnapshot()
+                        appSettingsDataStore.savePreferredModels(
+                            preferred.copy(chatModelId = primaryModelId)
+                        )
+                        appSettingsDataStore.saveLastModelId(primaryModelId)
+                        modelRepository.getModelById(primaryModelId)?.let { model ->
+                            appSettingsDataStore.saveActiveModelState(
+                                ActiveModelState(
+                                    modelId = model.id,
+                                    modelName = model.modelName,
+                                    providerTypeName = model.providerType.name,
+                                    installStage = ActiveModelInstallStage.SELECTED,
+                                    activationState = ActiveModelActivationState.IDLE,
+                                )
+                            )
+                        }
+                    }
+                    SetupOption.IMAGE_GEN -> {
+                        val preferred = appSettingsDataStore.preferredModelsSnapshot()
+                        appSettingsDataStore.savePreferredModels(
+                            preferred.copy(imageGenerationModelId = primaryModelId)
+                        )
+                    }
+                    SetupOption.POWER_MODE, null -> Unit
+                }
+            }
             setupDataStore.completeSetup()
             _setupComplete.value = true
         }

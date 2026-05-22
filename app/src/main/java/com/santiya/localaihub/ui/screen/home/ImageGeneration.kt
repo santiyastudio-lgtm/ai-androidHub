@@ -55,7 +55,7 @@ internal fun ImageGenerationStreamingBubble(
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = "$step вЂў ${(progress * 100).toInt()}%",
+                    text = "$step • ${(progress * 100).toInt()}%",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

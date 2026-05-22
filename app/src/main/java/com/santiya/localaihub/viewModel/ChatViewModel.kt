@@ -10,6 +10,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.santiya.localaihub.data.AppSettingsDataStore
 import com.santiya.localaihub.data.ActiveModelActivationState
+import com.santiya.localaihub.airllm.AirLlmGatewayClient
+import com.santiya.localaihub.openclaw.OfficialOpenClawGatewayClient
 import com.santiya.localaihub.di.AppContainer
 import com.santiya.localaihub.engine.GenerationEvent
 import com.santiya.localaihub.browser.BrowserSessionSnapshot
@@ -41,6 +43,7 @@ import com.santiya.localaihub.offlinecity.OfflineCityAnswer
 import com.santiya.localaihub.offlinecity.OfflineCityAssistant
 import com.santiya.localaihub.offlinecity.OfflineCityLocationProvider
 import com.santiya.localaihub.offlinecity.OfflineCityStorage
+import com.santiya.localaihub.hub.LocalBackendOption
 import com.santiya.localaihub.hub.OpenClawLocalSettingsStore
 import com.santiya.googlelocalruntime.GoogleLocalMessage
 import com.dark.gguf_lib.toolcalling.ToolCall
@@ -56,6 +59,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.stateIn
@@ -79,6 +84,8 @@ class ChatViewModel @Inject constructor(
     private val appContext = context
     private val appSettings = AppSettingsDataStore(context)
     private val openClawSettingsStore = OpenClawLocalSettingsStore(context)
+    private val airLlmGatewayClient = AirLlmGatewayClient()
+    private val officialOpenClawGatewayClient = OfficialOpenClawGatewayClient()
     private val ttsDataStore = com.santiya.localaihub.tts.TTSDataStore(context)
     private val offlineCityStorage = OfflineCityStorage(context)
     private val offlineCityAssistant = OfflineCityAssistant()
@@ -90,6 +97,29 @@ class ChatViewModel @Inject constructor(
 
     val chatMemoryEnabled: StateFlow<Boolean> = appSettings.chatMemoryEnabled
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    private val activeModelProvider: StateFlow<ProviderType?> = appSettings.activeModelState
+        .map { state ->
+            state.providerTypeName?.let { runCatching { ProviderType.valueOf(it) }.getOrNull() }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private val activeAirLlmModelId: StateFlow<String?> = appSettings.activeModelState
+        .map { state ->
+            state.modelId?.takeIf {
+                state.providerTypeName == ProviderType.AIRLLM_REMOTE.name &&
+                    state.activationState == ActiveModelActivationState.ACTIVE
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private fun officialGatewaySettingsOrNull() = runCatching {
+        openClawSettingsStore.read().takeIf { settings ->
+            (settings.defaultBackend == LocalBackendOption.OFFICIAL_GATEWAY ||
+                settings.defaultBackend == LocalBackendOption.TERMUX_LOCAL) &&
+                (_openClawEnabled.value || settings.enabledByDefault)
+        }
+    }.getOrNull()
 
     private val _messages = mutableStateListOf<Messages>()
     val messages: SnapshotStateList<Messages> = _messages
@@ -158,16 +188,23 @@ class ChatViewModel @Inject constructor(
 
     // Current model ID for per-message attribution
     private val currentModelId: String?
-        get() = LlmModelWorker.currentGoogleLocalModelId.value ?: LlmModelWorker.currentGgufModelId.value
+        get() = LlmModelWorker.currentGoogleLocalModelId.value
+            ?: LlmModelWorker.currentGgufModelId.value
+            ?: activeAirLlmModelId.value
+            ?: officialGatewaySettingsOrNull()?.officialGatewayModelId?.ifBlank { OfficialOpenClawGatewayClient.DEFAULT_MODEL_ID }
 
     /** True when a text generation model is loaded. */
     private val isAnyTextModelLoaded: Boolean
-        get() = LlmModelWorker.isGgufModelLoaded.value || LlmModelWorker.isGoogleLocalModelLoaded.value
+        get() = LlmModelWorker.isGgufModelLoaded.value ||
+            LlmModelWorker.isGoogleLocalModelLoaded.value ||
+            activeAirLlmModelId.value != null ||
+            officialGatewaySettingsOrNull() != null
 
     private val currentTextProviderType: ProviderType?
         get() = when {
             LlmModelWorker.isGoogleLocalModelLoaded.value -> ProviderType.GOOGLE_LOCAL
             LlmModelWorker.isGgufModelLoaded.value -> ProviderType.GGUF
+            activeAirLlmModelId.value != null -> ProviderType.AIRLLM_REMOTE
             else -> null
         }
 
@@ -451,19 +488,59 @@ class ChatViewModel @Inject constructor(
         val selectedSkills = settings.selectedSkillIds
             .takeIf { it.isNotEmpty() }
             ?.toSet()
-            ?: setOf("travel_offline", "browser", "files", "memory")
+            ?: setOf("hermes", "travel_offline", "browser", "files", "memory", "automation", "location_control", "airllm", "official_openclaw_gateway")
         val selectedTools = settings.selectedApiToolIds
             .takeIf { it.isNotEmpty() }
             ?.toSet()
-            ?: setOf("web_search", "browser", "api_models", "support_logs")
+            ?: setOf("hermes", "web_search", "browser", "api_models", "support_logs", "system_info", "location_control", "airllm", "official_openclaw_gateway")
+        val effectiveSkills = selectedSkills + setOf("files", "memory", "automation", "hermes")
+        val effectiveTools = selectedTools + setOf(
+            "hermes",
+            "web_search",
+            "browser",
+            "system_info",
+            "location_control",
+            "calculator",
+            "date_time",
+            "airllm",
+            "official_openclaw_gateway"
+        )
+        val enableTermux = enabled &&
+            (settings.defaultBackend == LocalBackendOption.TERMUX_LOCAL ||
+                "termux" in selectedSkills ||
+                "termux" in selectedTools)
+        val enableAirLlm = enabled &&
+            (settings.defaultBackend == LocalBackendOption.AIRLLM_REMOTE ||
+                "airllm" in selectedSkills ||
+                "airllm" in selectedTools)
+        val enableOfficialGateway = enabled &&
+            (settings.defaultBackend == LocalBackendOption.OFFICIAL_GATEWAY ||
+                settings.defaultBackend == LocalBackendOption.TERMUX_LOCAL ||
+                "official_openclaw_gateway" in selectedSkills ||
+                "official_openclaw_gateway" in selectedTools)
 
-        PluginManager.enableWebSearch(enabled && "web_search" in selectedTools)
-        PluginManager.togglePlugin("Browser", enabled && "browser" in selectedTools)
-        PluginManager.togglePlugin("File Manager", enabled && "files" in selectedSkills)
-        PluginManager.togglePlugin("NotePad", enabled && "memory" in selectedSkills)
-        PluginManager.togglePlugin("Automation", enabled && "automation" in selectedSkills)
-        PluginManager.togglePlugin("System Info", enabled && "system_info" in selectedTools)
-        PluginManager.togglePlugin("Location Control", enabled && "location_control" in selectedTools)
+        PluginManager.enableWebSearch(enabled && "web_search" in effectiveTools)
+        PluginManager.togglePlugin("Hermes Agent", enabled && ("hermes" in effectiveTools || "hermes" in effectiveSkills))
+        PluginManager.togglePlugin("Browser", enabled && "browser" in effectiveTools)
+        PluginManager.togglePlugin("File Manager", enabled && "files" in effectiveSkills)
+        PluginManager.togglePlugin("NotePad", enabled && "memory" in effectiveSkills)
+        PluginManager.togglePlugin("Automation", enabled && "automation" in effectiveSkills)
+        PluginManager.togglePlugin("Termux", enableTermux)
+        PluginManager.togglePlugin("AirLLM Gateway", enableAirLlm)
+        PluginManager.togglePlugin("Official OpenClaw Gateway", enableOfficialGateway)
+        PluginManager.togglePlugin("System Info", enabled && "system_info" in effectiveTools)
+        PluginManager.togglePlugin("Location Control", enabled && "location_control" in effectiveTools)
+        PluginManager.togglePlugin("Calculator", enabled && "calculator" in effectiveTools)
+        PluginManager.togglePlugin("Date & Time", enabled && "date_time" in effectiveTools)
+    }
+
+    private fun currentOpenClawBackend(): LocalBackendOption {
+        return runCatching { openClawSettingsStore.read().defaultBackend }
+            .getOrDefault(LocalBackendOption.GGUF_LOCAL)
+    }
+
+    private fun allowsGoogleLocalOpenClawTools(): Boolean {
+        return true
     }
 
     // ==================== RAG Controls ====================
@@ -617,11 +694,14 @@ class ChatViewModel @Inject constructor(
                 val useOpenClawAgent = _openClawEnabled.value
                 val useOrchestra = selectedMode == OpenClawMode.ORCHESTRA
                 val useThinking = selectedMode == OpenClawMode.THINKING
-                if (currentTextProviderType == ProviderType.GOOGLE_LOCAL && (hasTools || useThinking || useOrchestra)) {
-                    reportError("Google Local сейчас работает только как обычный чат. Для думающего режима и инструментов OpenClaw загрузите локальную GGUF-модель.")
+                val usingOfficialGateway = officialGatewaySettingsOrNull() != null
+                if (currentTextProviderType == ProviderType.GOOGLE_LOCAL && (useThinking || useOrchestra)) {
+                    reportError(
+                        "Google Local поддерживает обычный OpenClaw agent mode с Hermes tools. Думающий режим и оркестр оставьте на GGUF/Termux."
+                    )
                     return@launch
                 }
-                if (useOrchestra && !hasTools) {
+                if (useOrchestra && !hasTools && !usingOfficialGateway) {
                     reportError("OpenClaw Orchestra requires local tools and a loaded local tool-capable model.")
                     return@launch
                 }
@@ -672,6 +752,9 @@ class ChatViewModel @Inject constructor(
         val model = runCatching { repository.getModelById(modelId) }.getOrNull() ?: return
 
         when {
+            activeState.providerTypeName == ProviderType.AIRLLM_REMOTE.name -> {
+                PluginManager.togglePlugin("AirLLM Gateway", true)
+            }
             activeState.providerTypeName == ProviderType.GOOGLE_LOCAL.name ||
                 GoogleLocalSupport.shouldPreferForGemma(appContext, model.id, model.modelName) -> {
                 val descriptor = GoogleLocalSupport.buildGemmaDescriptor(model.id, model.modelName)
@@ -966,8 +1049,13 @@ class ChatViewModel @Inject constructor(
     }
 
     private suspend fun getCurrentModelMaxTokens(): Int =
-        if (currentTextProviderType == ProviderType.GOOGLE_LOCAL) 2048
-        else getGgufModelSchema().inferenceParams.maxTokens
+        if (officialGatewaySettingsOrNull() != null) {
+            2048
+        } else when (currentTextProviderType) {
+            ProviderType.GOOGLE_LOCAL -> 2048
+            ProviderType.AIRLLM_REMOTE -> 512
+            else -> getGgufModelSchema().inferenceParams.maxTokens
+        }
 
     // ==================== Agent Flow (Plan РІвЂ вЂ™ Execute РІвЂ вЂ™ Summarize) ====================
 
@@ -1038,12 +1126,19 @@ class ChatViewModel @Inject constructor(
     /** Phase 1: Generate a brief plan describing which tools to use. */
     private suspend fun generatePlan(prompt: String): String {
         PluginManager.clearGrammar()
+        val russian = isRussianPrompt(prompt)
         val toolDescriptions = PluginManager.getToolDescriptionsText()
         val systemPrompt = buildString {
-            appendLine("Available tools:")
+            appendLine(if (russian) "Доступные инструменты:" else "Available tools:")
             appendLine(toolDescriptions)
             appendLine()
-            appendLine("Write a 1-2 sentence plan: which tools to call and what arguments to pass. Be specific and concise.")
+            appendLine(
+                if (russian) {
+                    "Напиши очень короткий план на русском в 1-2 пункта: какие инструменты вызвать и зачем. Без лишних объяснений."
+                } else {
+                    "Write a 1-2 sentence plan: which tools to call and what arguments to pass. Be specific and concise."
+                }
+            )
         }
         val messages = listOf(
             JSONObject().put("role", "system").put("content", systemPrompt),
@@ -1053,6 +1148,9 @@ class ChatViewModel @Inject constructor(
             generatePlainText(messages, maxTokens = PLAN_MAX_TOKENS)
         }?.takeIf { it.isNotBlank() } ?: buildFallbackPlan(prompt)
     }
+
+    private fun isRussianPrompt(prompt: String): Boolean =
+        prompt.any { it in '\u0400'..'\u04FF' }
 
     /**
      * Phase 2: Bounded generate РІвЂ вЂ™ execute loop.
@@ -1166,6 +1264,26 @@ class ChatViewModel @Inject constructor(
                     continue
                 }
 
+                if (!isToolCallRelevantToPrompt(normalizedName, argsObj, prompt)) {
+                    Log.w(TAG, "Rejected irrelevant tool call '$normalizedName' for prompt: $prompt")
+                    steps.add(ToolChainStepData(
+                        round = steps.size + 1,
+                        toolName = normalizedName,
+                        pluginName = "Agent Guard",
+                        args = argsObj.toString().take(500),
+                        result = "Tool call rejected as unrelated to the current prompt",
+                        executionTimeMs = 0,
+                        success = false
+                    ))
+                    _toolChainSteps.value = steps.toList()
+                    consecutiveFailures++
+                    if (consecutiveFailures >= 2) {
+                        Log.w(TAG, "2 consecutive failures, stopping agent loop")
+                        break
+                    }
+                    continue
+                }
+
                 AppStateManager.setExecutingPlugin("", normalizedName)
 
                 val toolCall = ToolCall(name = normalizedName, arguments = argsObj)
@@ -1266,6 +1384,60 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private fun isToolCallRelevantToPrompt(
+        normalizedToolName: String,
+        argsObj: JSONObject,
+        prompt: String
+    ): Boolean {
+        val normalizedPrompt = prompt.lowercase(Locale.ROOT)
+        val wantsTrends = listOf("trend", "trends", "тренд", "тренды").any { normalizedPrompt.contains(it) }
+        val wantsWebSearch = listOf("google", "гугл", "web search", "search web", "search", "поиск", "загугл").any {
+            normalizedPrompt.contains(it)
+        }
+        val wantsBrowser = listOf("open", "browser", "брауз", "открой").any { normalizedPrompt.contains(it) }
+        val wantsGps = listOf("gps", "location", "геолокац", "локац", "джипиес").any { normalizedPrompt.contains(it) }
+        val wantsSettings = listOf("settings", "настройк").any { normalizedPrompt.contains(it) }
+        val wantsScript = listOf("script", "скрипт").any { normalizedPrompt.contains(it) }
+        val wantsTerminal = listOf("termux", "shell", "bash", "python", "node", "git", "command", "terminal").any {
+            normalizedPrompt.contains(it)
+        }
+        val wantsAirLlm = listOf("airllm", "air llm", "hf model", "hugging face", "больш", "модель больше", "модели больше").any {
+            normalizedPrompt.contains(it)
+        }
+        val wantsOfficialGateway = listOf("official openclaw", "openclaw gateway", "gateway", "официальн", "гейтвей", "шлюз").any {
+            normalizedPrompt.contains(it)
+        }
+        val wantsFileEdit = listOf("file", "files", "файл", "файлы", "write", "save", "создай", "запиши").any {
+            normalizedPrompt.contains(it)
+        }
+        val explicitUrl = Regex("""\b((?:https?://)?[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/\S*)?)\b""")
+            .containsMatchIn(prompt)
+
+        return when (normalizedToolName) {
+            "web_search" -> wantsTrends || wantsWebSearch
+            "browser_open_url", "hermes_open_browser", "browser_back", "browser_forward", "browser_refresh", "browser_current_page" ->
+                wantsBrowser || explicitUrl
+            "get_location_status", "hermes_location_status", "set_location_enabled" -> wantsGps
+            "open_location_settings", "hermes_open_location_settings" -> wantsGps && wantsSettings
+            "execute_script", "hermes_run_script" -> wantsScript || wantsGps || wantsTerminal
+            "create_file", "hermes_write_file" -> {
+                val path = argsObj.optString("path").lowercase(Locale.ROOT)
+                wantsFileEdit || wantsScript || path.contains("automation/")
+            }
+            "hermes_read_file", "hermes_list_files" -> wantsFileEdit
+            "hermes_status" -> normalizedPrompt.contains("hermes") || normalizedPrompt.contains("хермес") ||
+                normalizedPrompt.contains("openclaw") || normalizedPrompt.contains("опенклав")
+            "termux_status", "termux_exec", "termux_run_workspace_file" -> wantsTerminal || wantsScript
+            "airllm_status", "airllm_write_gateway_script" -> wantsAirLlm
+            "airllm_generate" -> wantsAirLlm
+            "openclaw_gateway_status", "openclaw_gateway_models", "openclaw_gateway_write_setup_scripts",
+            "openclaw_gateway_connect_frame", "openclaw_gateway_termux_bootstrap", "openclaw_gateway_termux_start",
+            "openclaw_gateway_termux_status", "openclaw_gateway_termux_call" -> wantsOfficialGateway
+            "openclaw_gateway_send", "openclaw_gateway_tool_invoke" -> wantsOfficialGateway || normalizedPrompt.contains("openclaw")
+            else -> true
+        }
+    }
+
     /** Phase 3: Generate a natural language summary from all tool results. */
     private suspend fun generateSummary(
         prompt: String,
@@ -1296,10 +1468,57 @@ class ChatViewModel @Inject constructor(
         val planLine: String,
     )
 
+    private fun buildBuyDipStrategyFileName(prompt: String): String {
+        val explicit = Regex("""([A-Za-z0-9_.-]+\.txt)\b""")
+            .find(prompt)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+        return explicit?.takeIf { it.isNotBlank() } ?: "buy_dip_strategy.txt"
+    }
+
+    private fun buildBuyDipStrategyText(prompt: String): String {
+        val isRussian = listOf("стратег", "загрузк", "купи", "папк", "бай").any {
+            prompt.lowercase(Locale.ROOT).contains(it)
+        }
+        return if (isRussian) {
+            """
+            Стратегия buy the dip
+
+            1. Определите базовый актив и максимальный риск на одну идею: не более 1-2% капитала.
+            2. Не входите одной покупкой. Разбейте вход на 3 части: первая на откате 5-7%, вторая на 10-12%, третья только после подтверждения удержания уровня.
+            3. Покупайте только сильные активы с ликвидностью и понятным новостным фоном, не усредняйте слабые и убыточные позиции без плана.
+            4. Перед входом отметьте уровень отмены идеи. Если цена закрывается ниже него, позицию сокращайте, а не усредняйте бесконечно.
+            5. Фиксируйте часть прибыли поэтапно: 25% на первом возврате к сопротивлению, остальное переводите в безубыток и ведите по тренду.
+            6. Если на рынке сильный новостной риск, сначала дождитесь реакции и только потом набирайте позицию.
+
+            Рабочая схема:
+            - список активов с высоким объёмом;
+            - уровни входа заранее;
+            - частичный вход;
+            - жёсткий лимит риска;
+            - частичная фиксация прибыли.
+            """.trimIndent()
+        } else {
+            """
+            Buy the Dip Strategy
+
+            1. Define the asset and cap risk per idea at 1-2% of total capital.
+            2. Never enter in one order. Split entries into three tranches: first on a 5-7% pullback, second near 10-12%, third only after support holds.
+            3. Focus on liquid, strong assets with a clear catalyst. Do not average into weak names without a strict invalidation plan.
+            4. Mark the invalidation level before entry. If price closes below it, reduce or exit instead of averaging indefinitely.
+            5. Scale out gradually: take partial profit on the first move back into resistance, move the rest to breakeven, then trail the trend.
+            6. During high-impact news, wait for the first reaction before adding size.
+            """.trimIndent()
+        }
+    }
+
     private fun buildDirectAgentToolSequence(prompt: String): List<DirectAgentToolSpec> {
         val normalized = prompt.lowercase(Locale.ROOT)
+        val russian = isRussianPrompt(prompt)
         val enabledTools = PluginManager.getEnabledToolNames().map { it.lowercase(Locale.ROOT) }.toSet()
         val steps = mutableListOf<DirectAgentToolSpec>()
+        fun firstEnabled(vararg names: String): String? = names.firstOrNull { it in enabledTools }
 
         val wantsTrends = listOf("trend", "trends", "тренд", "тренды").any { normalized.contains(it) }
         val wantsWebSearch = listOf("google", "гугл", "web search", "search web", "загугл").any { normalized.contains(it) }
@@ -1307,7 +1526,11 @@ class ChatViewModel @Inject constructor(
             steps += DirectAgentToolSpec(
                 toolName = "web_search",
                 args = JSONObject().put("query", prompt).put("max_results", 3),
-                planLine = "Search the web for the latest AI trend signals and collect top sources"
+                planLine = if (russian) {
+                    "Найти свежие сигналы по теме через веб-поиск."
+                } else {
+                    "Search the web for the latest AI trend signals and collect top sources."
+                }
             )
         }
 
@@ -1316,54 +1539,321 @@ class ChatViewModel @Inject constructor(
             ?.groupValues
             ?.getOrNull(1)
         val wantsBrowser = listOf("open", "browser", "брауз", "открой").any { normalized.contains(it) }
-        if (!explicitUrl.isNullOrBlank() && wantsBrowser && "browser_open_url" in enabledTools) {
+        val openBrowserTool = firstEnabled("hermes_open_browser", "browser_open_url")
+        if (!explicitUrl.isNullOrBlank() && wantsBrowser && openBrowserTool != null) {
             steps += DirectAgentToolSpec(
-                toolName = "browser_open_url",
+                toolName = openBrowserTool,
                 args = JSONObject().put("url", explicitUrl),
-                planLine = "Open the requested page in the embedded browser"
+                planLine = if (russian) {
+                    "Открыть нужную страницу во встроенном браузере."
+                } else {
+                    "Open the requested page in the embedded browser."
+                }
+            )
+        }
+
+        val wantsHermesStatus = listOf("hermes", "хермес", "openclaw", "опенклав").any { normalized.contains(it) } &&
+            listOf("status", "статус", "проверь", "готов", "ready").any { normalized.contains(it) }
+        if (wantsHermesStatus && "hermes_status" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "hermes_status",
+                args = JSONObject(),
+                planLine = if (russian) {
+                    "Проверить готовность Hermes/OpenClaw инструментов."
+                } else {
+                    "Check Hermes/OpenClaw tool readiness."
+                }
+            )
+        }
+
+        val calculatorIntent = listOf("калькулятор", "посчитай", "вычисли", "calculate", "calc").any {
+            normalized.contains(it)
+        }
+        val mathExpression = extractMathExpression(prompt)
+        if (calculatorIntent && !mathExpression.isNullOrBlank() && "calculate" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "calculate",
+                args = JSONObject().put("expression", mathExpression),
+                planLine = if (russian) {
+                    "Посчитать выражение через калькулятор."
+                } else {
+                    "Evaluate the requested expression with the calculator."
+                }
+            )
+        }
+
+        val dateTimeIntent = listOf("время", "дата", "date", "time", "timezone", "час").any {
+            normalized.contains(it)
+        }
+        if (dateTimeIntent && "get_current_datetime" in enabledTools) {
+            val timezone = when {
+                listOf("москв", "moscow").any { normalized.contains(it) } -> "Europe/Moscow"
+                else -> ""
+            }
+            val format = when {
+                listOf("только время", "only time").any { normalized.contains(it) } -> "time"
+                listOf("только дата", "only date").any { normalized.contains(it) } -> "date"
+                else -> "full"
+            }
+            steps += DirectAgentToolSpec(
+                toolName = "get_current_datetime",
+                args = JSONObject().apply {
+                    if (timezone.isNotBlank()) put("timezone", timezone)
+                    put("format", format)
+                },
+                planLine = if (russian) {
+                    "Получить текущие дату и время."
+                } else {
+                    "Get the current date and time."
+                }
+            )
+        }
+
+        val systemInfoIntent = listOf("system info", "system", "система", "системе", "системную информацию", "информацию о системе").any {
+            normalized.contains(it)
+        }
+        if (systemInfoIntent && "get_system_info" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "get_system_info",
+                args = JSONObject(),
+                planLine = if (russian) {
+                    "Собрать краткую информацию о системе."
+                } else {
+                    "Read the current system information."
+                }
+            )
+        }
+
+        val wantsAirLlm = listOf("airllm", "air llm", "hugging face", "hf model", "большие модели", "модели больше", "больше миллиарда").any {
+            normalized.contains(it)
+        }
+        val wantsAirLlmSetup = wantsAirLlm && listOf("setup", "install", "gateway", "script", "скрипт", "установ", "настрой", "интегр").any {
+            normalized.contains(it)
+        }
+        if (wantsAirLlm && "airllm_status" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "airllm_status",
+                args = JSONObject(),
+                planLine = if (russian) {
+                    "Проверить доступность AirLLM gateway."
+                } else {
+                    "Check AirLLM gateway readiness."
+                }
+            )
+        }
+        if (wantsAirLlmSetup && "airllm_write_gateway_script" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "airllm_write_gateway_script",
+                args = JSONObject(),
+                planLine = if (russian) {
+                    "Создать Python gateway script для AirLLM."
+                } else {
+                    "Write the Python gateway script for AirLLM."
+                }
+            )
+        }
+        if (wantsAirLlm && !wantsAirLlmSetup && "airllm_generate" in enabledTools &&
+            listOf("generate", "ask", "ответ", "спрос", "запрос").any { normalized.contains(it) }
+        ) {
+            steps += DirectAgentToolSpec(
+                toolName = "airllm_generate",
+                args = JSONObject().put("prompt", prompt).put("max_new_tokens", 256),
+                planLine = if (russian) {
+                    "Передать запрос в AirLLM gateway."
+                } else {
+                    "Send the request through AirLLM gateway."
+                }
+            )
+        }
+
+        val wantsOfficialGateway = listOf("official openclaw", "openclaw gateway", "гейтвей", "шлюз", "официальн").any {
+            normalized.contains(it)
+        }
+        val wantsOfficialGatewaySetup = wantsOfficialGateway &&
+            listOf("setup", "install", "script", "скрипт", "установ", "настрой", "интегр").any { normalized.contains(it) }
+        val wantsOfficialGatewayTermux = wantsOfficialGateway &&
+            listOf("termux", "термукс", "android", "андроид", "phone", "телефон", "эмулятор", "emulator", "локаль").any {
+                normalized.contains(it)
+            }
+        val wantsOfficialGatewayStart = wantsOfficialGateway &&
+            listOf("start", "run", "launch", "запусти", "запуск", "подними", "включ").any { normalized.contains(it) }
+        if (wantsOfficialGateway && "openclaw_gateway_status" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "openclaw_gateway_status",
+                args = JSONObject(),
+                planLine = if (russian) {
+                    "Проверить доступность официального OpenClaw Gateway."
+                } else {
+                    "Check official OpenClaw Gateway readiness."
+                }
+            )
+        }
+        if (wantsOfficialGatewayTermux && wantsOfficialGatewaySetup && "openclaw_gateway_termux_bootstrap" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "openclaw_gateway_termux_bootstrap",
+                args = JSONObject(),
+                planLine = if (russian) {
+                    "Установить официальный OpenClaw CLI в Termux."
+                } else {
+                    "Install the official OpenClaw CLI in Termux."
+                }
+            )
+        }
+        if (wantsOfficialGatewayTermux && wantsOfficialGatewayStart && "openclaw_gateway_termux_start" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "openclaw_gateway_termux_start",
+                args = JSONObject(),
+                planLine = if (russian) {
+                    "Запустить официальный OpenClaw Gateway локально через Termux."
+                } else {
+                    "Start the official OpenClaw Gateway locally through Termux."
+                }
+            )
+        }
+        if (wantsOfficialGatewayTermux && "openclaw_gateway_termux_status" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "openclaw_gateway_termux_status",
+                args = JSONObject(),
+                planLine = if (russian) {
+                    "Проверить локальный OpenClaw Gateway через Termux CLI."
+                } else {
+                    "Probe the local OpenClaw Gateway through the Termux CLI."
+                }
+            )
+        }
+        if (wantsOfficialGatewaySetup && "openclaw_gateway_write_setup_scripts" in enabledTools) {
+            steps += DirectAgentToolSpec(
+                toolName = "openclaw_gateway_write_setup_scripts",
+                args = JSONObject(),
+                planLine = if (russian) {
+                    "Создать scripts для запуска официального OpenClaw Gateway."
+                } else {
+                    "Write official OpenClaw Gateway setup scripts."
+                }
+            )
+        }
+        if (wantsOfficialGateway && !wantsOfficialGatewaySetup && "openclaw_gateway_send" in enabledTools &&
+            listOf("send", "ask", "ответ", "спрос", "запрос").any { normalized.contains(it) }
+        ) {
+            steps += DirectAgentToolSpec(
+                toolName = "openclaw_gateway_send",
+                args = JSONObject().put("prompt", prompt).put("max_tokens", 1024),
+                planLine = if (russian) {
+                    "Передать запрос в официальный OpenClaw Gateway."
+                } else {
+                    "Send the request through the official OpenClaw Gateway."
+                }
             )
         }
 
         val wantsGps = listOf("gps", "location", "геолокац", "локац", "джипиес").any { normalized.contains(it) }
         val wantsScript = listOf("script", "скрипт").any { normalized.contains(it) }
+        val wantsStatusOnly = listOf("статус", "status", "проверь", "check").any { normalized.contains(it) } &&
+            !wantsScript && !listOf("enable", "turn on", "включ", "disable", "turn off", "выключ", "on", "off").any {
+                normalized.contains(it)
+            }
+        val locationStatusTool = firstEnabled("hermes_location_status", "get_location_status")
+        if (wantsGps && wantsStatusOnly && locationStatusTool != null) {
+            steps += DirectAgentToolSpec(
+                toolName = locationStatusTool,
+                args = JSONObject(),
+                planLine = if (russian) {
+                    "Проверить текущий статус геолокации."
+                } else {
+                    "Read the current location-services status."
+                }
+            )
+        }
         if (wantsGps && wantsScript) {
             val enableLocation = listOf("enable", "turn on", "включ", "on").any { normalized.contains(it) } &&
                 !listOf("disable", "turn off", "выключ", "off").any { normalized.contains(it) }
             val scriptPath = if (enableLocation) "automation/toggle_location_on.sh" else "automation/toggle_location_off.sh"
-            if ("create_file" in enabledTools) {
+            val writeTool = firstEnabled("hermes_write_file", "create_file")
+            if (writeTool != null) {
                 val scriptBody = buildString {
                     appendLine("#!/system/bin/sh")
                     appendLine("cmd location set-location-enabled ${if (enableLocation) "true" else "false"}")
                 }
                 steps += DirectAgentToolSpec(
-                    toolName = "create_file",
+                    toolName = writeTool,
                     args = JSONObject()
                         .put("path", scriptPath)
                         .put("content", scriptBody)
                         .put("append", false),
-                    planLine = "Write a shell script for the requested location toggle"
+                    planLine = if (russian) {
+                        "Сохранить скрипт для переключения геолокации."
+                    } else {
+                        "Write a shell script for the requested location toggle."
+                    }
                 )
             }
-            if ("execute_script" in enabledTools) {
+            val runScriptTool = firstEnabled("hermes_run_script", "execute_script")
+            if (runScriptTool != null) {
                 steps += DirectAgentToolSpec(
-                    toolName = "execute_script",
+                    toolName = runScriptTool,
                     args = JSONObject()
                         .put("path", scriptPath)
                         .put("interpreter", "sh")
                         .put("timeout_seconds", 12),
-                    planLine = "Run the generated shell script inside the app sandbox"
+                    planLine = if (russian) {
+                        "Запустить скрипт внутри приложения."
+                    } else {
+                        "Run the generated shell script inside the app sandbox."
+                    }
                 )
             }
-            if ("get_location_status" in enabledTools) {
+            if (locationStatusTool != null) {
                 steps += DirectAgentToolSpec(
-                    toolName = "get_location_status",
+                    toolName = locationStatusTool,
                     args = JSONObject(),
-                    planLine = "Read back the current Android location-services state"
+                    planLine = if (russian) {
+                        "Проверить итоговый статус геолокации."
+                    } else {
+                        "Read back the current Android location-services state."
+                    }
                 )
             }
         }
 
+        val wantsFileEdit = listOf("file", "files", "файл", "файлы", "write", "save", "создай", "запиши", "сохрани").any {
+            normalized.contains(it)
+        }
+        val wantsDownloads = listOf("downloads", "download", "загрузк").any { normalized.contains(it) }
+        val wantsBuyDipStrategy = listOf("buy dip", "buy the dip", "buy dpi", "бай дип", "стратег").any {
+            normalized.contains(it)
+        }
+        val fileWriteTool = when {
+            wantsDownloads && "create_file" in enabledTools -> "create_file"
+            "hermes_write_file" in enabledTools -> "hermes_write_file"
+            "create_file" in enabledTools -> "create_file"
+            else -> null
+        }
+        if (wantsFileEdit && wantsBuyDipStrategy && fileWriteTool != null) {
+            val fileName = buildBuyDipStrategyFileName(prompt)
+            val relativePath = if (wantsDownloads && fileWriteTool == "create_file") "Downloads/$fileName" else fileName
+            steps += DirectAgentToolSpec(
+                toolName = fileWriteTool,
+                args = JSONObject()
+                    .put("path", relativePath)
+                    .put("content", buildBuyDipStrategyText(prompt))
+                    .put("append", false),
+                planLine = if (russian) {
+                    "Сохранить стратегию в текстовый файл."
+                } else {
+                    "Write the requested buy-the-dip strategy into a text file."
+                }
+            )
+        }
+
         return steps
+    }
+
+    private fun extractMathExpression(prompt: String): String? {
+        val match = Regex("""([0-9().,+\-*/%^ ]{3,})""").find(prompt)?.groupValues?.getOrNull(1)
+        return match
+            ?.replace(',', '.')
+            ?.trim()
+            ?.takeIf { candidate -> candidate.any { it.isDigit() } && candidate.any { it in "+-*/%^" } }
     }
 
     private suspend fun executeDirectToolSequence(
@@ -1450,13 +1940,17 @@ class ChatViewModel @Inject constructor(
 
     private fun buildFallbackPlan(prompt: String): String {
         val normalized = prompt.lowercase(Locale.ROOT)
+        val russian = isRussianPrompt(prompt)
         return when {
             listOf("trend", "trends", "тренд", "тренды").any { normalized.contains(it) } ->
-                "1. Search the web for AI trend signals.\n2. Summarize the top findings for the user."
+                if (russian) "1. Найти свежие сигналы по трендам ИИ.\n2. Коротко свести главное."
+                else "1. Search the web for AI trend signals.\n2. Summarize the top findings for the user."
             listOf("gps", "location", "геолокац", "локац", "джипиес").any { normalized.contains(it) } ->
-                "1. Prepare a location-control script.\n2. Run it if Android allows the action.\n3. Read back the location status."
+                if (russian) "1. Подготовить скрипт для геолокации.\n2. Запустить его, если Android разрешит.\n3. Проверить текущий статус."
+                else "1. Prepare a location-control script.\n2. Run it if Android allows the action.\n3. Read back the location status."
             else ->
-                "1. Use available local tools if they are relevant.\n2. Summarize the result clearly for the user."
+                if (russian) "1. Использовать подходящие локальные инструменты.\n2. Коротко и понятно показать результат."
+                else "1. Use available local tools if they are relevant.\n2. Summarize the result clearly for the user."
         }
     }
 
@@ -1464,8 +1958,14 @@ class ChatViewModel @Inject constructor(
         prompt: String,
         steps: List<ToolChainStepData>
     ): String {
+        val russian = isRussianPrompt(prompt)
+        fun shorten(text: String, max: Int): String {
+            val clean = text.replace("\n", " ").replace(Regex("\\s+"), " ").trim()
+            return if (clean.length <= max) clean else clean.take(max).trimEnd() + "..."
+        }
         if (steps.isEmpty()) {
-            return "I could not execute any local tools for this request."
+            return if (russian) "Не удалось выполнить локальные инструменты для этого запроса."
+            else "I could not execute any local tools for this request."
         }
         val normalized = prompt.lowercase(Locale.ROOT)
         if (steps.any { it.toolName == "web_search" }) {
@@ -1476,23 +1976,36 @@ class ChatViewModel @Inject constructor(
                     val results = json.optJSONArray("results")
                     val bullets = buildList {
                         if (results != null) {
-                            for (i in 0 until minOf(results.length(), 3)) {
+                            for (i in 0 until minOf(results.length(), if (russian) 2 else 3)) {
                                 val item = results.optJSONObject(i) ?: continue
-                                val title = item.optString("title").ifBlank { "Untitled source" }
-                                val snippet = item.optString("snippet").replace("\n", " ").trim()
+                                val title = item.optString("title").ifBlank {
+                                    if (russian) "Источник без названия" else "Untitled source"
+                                }
+                                val snippet = shorten(item.optString("snippet"), if (russian) 96 else 140)
                                 val url = item.optString("url").trim()
                                 add(
-                                    buildString {
-                                        append("- ")
-                                        append(title)
-                                        if (snippet.isNotBlank()) {
-                                            append(": ")
-                                            append(snippet.take(220))
+                                    if (russian) {
+                                        buildString {
+                                            append("• ")
+                                            append(shorten(title, 72))
+                                            if (snippet.isNotBlank()) {
+                                                append(" — ")
+                                                append(snippet)
+                                            }
                                         }
-                                        if (url.isNotBlank()) {
-                                            append(" (")
-                                            append(url)
-                                            append(")")
+                                    } else {
+                                        buildString {
+                                            append("- ")
+                                            append(title)
+                                            if (snippet.isNotBlank()) {
+                                                append(": ")
+                                                append(snippet)
+                                            }
+                                            if (url.isNotBlank()) {
+                                                append(" (")
+                                                append(url)
+                                                append(")")
+                                            }
                                         }
                                     }
                                 )
@@ -1501,12 +2014,16 @@ class ChatViewModel @Inject constructor(
                     }
                     if (bullets.isNotEmpty()) {
                         return buildString {
-                            appendLine("AI trends report")
-                            appendLine()
-                            if (listOf("2026", "2025", "2027").any { normalized.contains(it) }) {
-                                appendLine("Latest search results for the requested timeframe:")
+                            if (russian) {
+                                appendLine("Коротко по трендам ИИ:")
                             } else {
-                                appendLine("Latest search results:")
+                                appendLine("AI trends report")
+                                appendLine()
+                                if (listOf("2026", "2025", "2027").any { normalized.contains(it) }) {
+                                    appendLine("Latest search results for the requested timeframe:")
+                                } else {
+                                    appendLine("Latest search results:")
+                                }
                             }
                             bullets.forEach { appendLine(it) }
                         }.trim()
@@ -1514,46 +2031,261 @@ class ChatViewModel @Inject constructor(
                 }
             }
         }
-        if (steps.any { it.toolName == "execute_script" || it.toolName == "get_location_status" }) {
-            val scriptStep = steps.lastOrNull { it.toolName == "execute_script" }
-            val locationStep = steps.lastOrNull { it.toolName == "get_location_status" }
+        if (steps.any { it.toolName == "browser_open_url" || it.toolName == "hermes_open_browser" }) {
+            val browserStep = steps.lastOrNull { it.toolName == "browser_open_url" || it.toolName == "hermes_open_browser" }
+            val parsed = runCatching { browserStep?.result?.let { JSONObject(it) } }.getOrNull()
+            val url = parsed?.optString("url").orEmpty().ifBlank {
+                steps.lastOrNull { it.toolName == "browser_open_url" || it.toolName == "hermes_open_browser" }
+                    ?.args
+                    ?.let { runCatching { JSONObject(it).optString("url") }.getOrNull() }
+                    .orEmpty()
+            }
+            return if (russian) {
+                if (url.isNotBlank()) "Сайт открыт: $url" else "Сайт открыт."
+            } else {
+                if (url.isNotBlank()) "Opened: $url" else "Page opened."
+            }
+        }
+        val hasScriptOrLocationStep = steps.any {
+            it.toolName == "execute_script" ||
+                it.toolName == "hermes_run_script" ||
+                it.toolName == "get_location_status" ||
+                it.toolName == "hermes_location_status"
+        }
+        if (!hasScriptOrLocationStep && steps.any { it.toolName == "create_file" || it.toolName == "hermes_write_file" }) {
+            val fileStep = steps.lastOrNull { it.toolName == "create_file" || it.toolName == "hermes_write_file" }
+            val parsed = runCatching { fileStep?.result?.let { JSONObject(it) } }.getOrNull()
+            val path = parsed?.optString("path").orEmpty()
+            val message = parsed?.optString("content").orEmpty().ifBlank { parsed?.optString("message").orEmpty() }
+            return buildString {
+                appendLine(if (russian) "Файл сохранён." else "File saved.")
+                if (path.isNotBlank()) {
+                    appendLine(if (russian) "Путь: $path" else "Path: $path")
+                }
+                if (!russian && message.isNotBlank()) {
+                    appendLine(shorten(message, 140))
+                }
+            }.trim()
+        }
+        if (steps.any { it.toolName == "calculate" }) {
+            val calcStep = steps.lastOrNull { it.toolName == "calculate" }
+            val parsed = runCatching { calcStep?.result?.let { JSONObject(it) } }.getOrNull()
+            val formatted = parsed?.optString("formattedResult").orEmpty()
+            val expression = parsed?.optString("expression").orEmpty()
+            return when {
+                russian && formatted.isNotBlank() -> "Ответ: $formatted"
+                formatted.isNotBlank() -> "Result: $formatted"
+                russian && expression.isNotBlank() -> "Посчитал: $expression"
+                expression.isNotBlank() -> "Calculated: $expression"
+                russian -> "Расчёт выполнен."
+                else -> "Calculation complete."
+            }
+        }
+        if (steps.any { it.toolName == "get_current_datetime" }) {
+            val timeStep = steps.lastOrNull { it.toolName == "get_current_datetime" }
+            val parsed = runCatching { timeStep?.result?.let { JSONObject(it) } }.getOrNull()
+            val result = parsed?.optString("result").orEmpty()
+            val timezone = parsed?.optString("timezone").orEmpty()
+            return when {
+                russian && timezone.isNotBlank() && result.isNotBlank() -> "Сейчас: $result ($timezone)"
+                russian && result.isNotBlank() -> "Сейчас: $result"
+                result.isNotBlank() && timezone.isNotBlank() -> "Current time: $result ($timezone)"
+                result.isNotBlank() -> "Current time: $result"
+                russian -> "Время получено."
+                else -> "Time fetched."
+            }
+        }
+        if (steps.any { it.toolName == "get_system_info" }) {
+            val systemStep = steps.lastOrNull { it.toolName == "get_system_info" }
+            val parsed = runCatching { systemStep?.result?.let { JSONObject(it) } }.getOrNull()
+            if (parsed != null) {
+                val battery = parsed.optInt("batteryPercent", -1)
+                val charging = parsed.optBoolean("isCharging", false)
+                val network = parsed.optString("networkType").ifBlank { if (russian) "неизвестно" else "unknown" }
+                val device = parsed.optString("deviceName").ifBlank { if (russian) "устройство" else "device" }
+                return if (russian) {
+                    buildString {
+                        append("Система: ")
+                        append(device)
+                        append(". Сеть: ")
+                        append(network)
+                        if (battery >= 0) {
+                            append(". Батарея: ")
+                            append(battery)
+                            append("%")
+                            if (charging) append(", зарядка")
+                        }
+                    }
+                } else {
+                    buildString {
+                        append("System: ")
+                        append(device)
+                        append(". Network: ")
+                        append(network)
+                        if (battery >= 0) {
+                            append(". Battery: ")
+                            append(battery)
+                            append("%")
+                            if (charging) append(", charging")
+                        }
+                }
+                }
+            }
+        }
+        if (steps.any { it.toolName == "termux_status" }) {
+            val termuxStep = steps.lastOrNull { it.toolName == "termux_status" }
+            val parsed = runCatching { termuxStep?.result?.let { JSONObject(it) } }.getOrNull()
+            val message = parsed?.optString("message").orEmpty()
+            val success = parsed?.optBoolean("success", false) == true
+            return when {
+                russian && message.contains("not installed", ignoreCase = true) -> "Termux не установлен."
+                russian && message.contains("permission", ignoreCase = true) -> "Termux найден, но доступ не выдан."
+                russian && message.contains("service is not visible", ignoreCase = true) -> "Termux найден, но сервис недоступен."
+                russian && message.isNotBlank() -> "Termux: ${shorten(message, 110)}"
+                message.isNotBlank() -> "Termux: $message"
+                russian && success -> "Termux готов."
+                russian -> "Termux недоступен."
+                success -> "Termux is ready."
+                else -> "Termux is unavailable."
+            }
+        }
+        if (steps.any { it.toolName == "airllm_status" || it.toolName == "airllm_write_gateway_script" || it.toolName == "airllm_generate" }) {
+            val airStep = steps.lastOrNull {
+                it.toolName == "airllm_generate" ||
+                    it.toolName == "airllm_write_gateway_script" ||
+                    it.toolName == "airllm_status"
+            }
+            val parsed = runCatching { airStep?.result?.let { JSONObject(it) } }.getOrNull()
+            val message = parsed?.optString("message").orEmpty()
+            val text = parsed?.optString("text").orEmpty()
+            val endpoint = parsed?.optString("endpoint").orEmpty()
+            val scriptPath = parsed?.optString("scriptPath").orEmpty()
+            return when {
+                airStep?.toolName == "airllm_generate" && text.isNotBlank() -> shorten(text, if (russian) 700 else 1200)
+                airStep?.toolName == "airllm_write_gateway_script" && russian ->
+                    "AirLLM gateway script создан. Путь: $scriptPath"
+                airStep?.toolName == "airllm_write_gateway_script" ->
+                    "AirLLM gateway script created. Path: $scriptPath"
+                russian && message.isNotBlank() && endpoint.isNotBlank() ->
+                    "AirLLM: ${shorten(message, 140)} Endpoint: $endpoint"
+                message.isNotBlank() && endpoint.isNotBlank() ->
+                    "AirLLM: ${shorten(message, 180)} Endpoint: $endpoint"
+                russian -> "AirLLM gateway пока недоступен. Запустите Python/PyTorch gateway и проверьте endpoint."
+                else -> "AirLLM gateway is not reachable yet. Start the Python/PyTorch gateway and check the endpoint."
+            }
+        }
+        if (steps.any {
+                it.toolName == "openclaw_gateway_status" ||
+                    it.toolName == "openclaw_gateway_models" ||
+                    it.toolName == "openclaw_gateway_send" ||
+                    it.toolName == "openclaw_gateway_write_setup_scripts" ||
+                    it.toolName == "openclaw_gateway_tool_invoke" ||
+                    it.toolName == "openclaw_gateway_termux_bootstrap" ||
+                    it.toolName == "openclaw_gateway_termux_start" ||
+                    it.toolName == "openclaw_gateway_termux_status" ||
+                    it.toolName == "openclaw_gateway_termux_call"
+            }
+        ) {
+            val gatewayStep = steps.lastOrNull {
+                it.toolName.startsWith("openclaw_gateway_")
+            }
+            val parsed = runCatching { gatewayStep?.result?.let { JSONObject(it) } }.getOrNull()
+            val message = parsed?.optString("message").orEmpty()
+            val text = parsed?.optString("text").orEmpty()
+            val endpoint = parsed?.optString("endpoint").orEmpty()
+            val shellPath = parsed?.optString("shellPath").orEmpty()
+            val cmdPath = parsed?.optString("cmdPath").orEmpty()
+            val termuxStdout = parsed?.optString("termuxStdout").orEmpty()
+            val termuxStderr = parsed?.optString("termuxStderr").orEmpty()
+            return when {
+                gatewayStep?.toolName == "openclaw_gateway_send" && text.isNotBlank() ->
+                    shorten(text, if (russian) 700 else 1200)
+                gatewayStep?.toolName?.startsWith("openclaw_gateway_termux_") == true && russian ->
+                    buildString {
+                        append("OpenClaw Gateway через Termux: ${shorten(message.ifBlank { "команда выполнена" }, 150)}")
+                        if (termuxStdout.isNotBlank()) append("\n${shorten(termuxStdout, 600)}")
+                        if (termuxStderr.isNotBlank()) append("\nОшибка: ${shorten(termuxStderr, 300)}")
+                    }
+                gatewayStep?.toolName?.startsWith("openclaw_gateway_termux_") == true ->
+                    buildString {
+                        append("OpenClaw Gateway through Termux: ${shorten(message.ifBlank { "command completed" }, 180)}")
+                        if (termuxStdout.isNotBlank()) append("\n${shorten(termuxStdout, 700)}")
+                        if (termuxStderr.isNotBlank()) append("\nError: ${shorten(termuxStderr, 320)}")
+                    }
+                gatewayStep?.toolName == "openclaw_gateway_write_setup_scripts" && russian ->
+                    "Скрипты official OpenClaw Gateway созданы. Windows: $cmdPath Linux/Termux: $shellPath"
+                gatewayStep?.toolName == "openclaw_gateway_write_setup_scripts" ->
+                    "Official OpenClaw Gateway scripts created. Windows: $cmdPath Linux/Termux: $shellPath"
+                russian && message.isNotBlank() && endpoint.isNotBlank() ->
+                    "OpenClaw Gateway: ${shorten(message, 160)} Endpoint: $endpoint"
+                message.isNotBlank() && endpoint.isNotBlank() ->
+                    "OpenClaw Gateway: ${shorten(message, 180)} Endpoint: $endpoint"
+                russian -> "Official OpenClaw Gateway пока недоступен. Запустите `openclaw gateway --port 18789` и проверьте endpoint."
+                else -> "Official OpenClaw Gateway is not reachable yet. Start `openclaw gateway --port 18789` and check the endpoint."
+            }
+        }
+        if (steps.any { it.toolName == "hermes_status" }) {
+            val hermesStep = steps.lastOrNull { it.toolName == "hermes_status" }
+            val parsed = runCatching { hermesStep?.result?.let { JSONObject(it) } }.getOrNull()
+            val message = parsed?.optString("message").orEmpty()
+            return when {
+                russian && message.isNotBlank() -> "Hermes готов: ${shorten(message, 160)}"
+                message.isNotBlank() -> "Hermes ready: ${shorten(message, 180)}"
+                russian -> "Hermes готов к локальному агентному режиму."
+                else -> "Hermes is ready for local agent mode."
+            }
+        }
+        if (steps.any { it.toolName == "execute_script" || it.toolName == "hermes_run_script" || it.toolName == "get_location_status" || it.toolName == "hermes_location_status" }) {
+            val scriptStep = steps.lastOrNull { it.toolName == "execute_script" || it.toolName == "hermes_run_script" }
+            val locationStep = steps.lastOrNull { it.toolName == "get_location_status" || it.toolName == "hermes_location_status" }
             val statusLine = runCatching {
                 locationStep?.result?.let { JSONObject(it) }?.let { json ->
-                    when (json.optBoolean("enabled", false)) {
-                        true -> "Current location status: enabled."
-                        false -> "Current location status: disabled."
+                    val enabled = if (json.has("enabled")) json.optBoolean("enabled", false) else json.optBoolean("locationEnabled", false)
+                    when (enabled) {
+                        true -> if (russian) "Статус геолокации: включена." else "Current location status: enabled."
+                        false -> if (russian) "Статус геолокации: выключена." else "Current location status: disabled."
                     }
                 }
-            }.getOrNull() ?: "Current location status could not be confirmed."
+            }.getOrNull() ?: if (russian) "Статус геолокации не удалось подтвердить." else "Current location status could not be confirmed."
             val scriptLine = runCatching {
                 scriptStep?.result?.let { JSONObject(it) }?.let { json ->
-                    val message = json.optString("message").ifBlank { "Script finished." }
-                    val path = json.optString("scriptPath")
+                    val message = json.optString("message").ifBlank {
+                        if (russian) "Скрипт выполнен." else "Script finished."
+                    }
+                    val path = json.optString("scriptPath").ifBlank { json.optString("path") }
                     if (path.isNotBlank()) {
-                        "$message Script: $path"
+                        if (russian) "$message Скрипт: $path" else "$message Script: $path"
                     } else {
                         message
                     }
                 }
-            }.getOrNull() ?: "No script execution result was returned."
-            return buildString {
-                appendLine("Location automation result")
-                appendLine()
-                appendLine(scriptLine)
-                appendLine(statusLine)
-            }.trim()
+            }.getOrNull() ?: if (russian) "Результат выполнения скрипта не получен." else "No script execution result was returned."
+            return if (russian) {
+                "Автоматизация: ${shorten(scriptLine, 110)} ${shorten(statusLine, 72)}".trim()
+            } else {
+                buildString {
+                    appendLine("Location automation result")
+                    appendLine()
+                    appendLine(scriptLine)
+                    appendLine(statusLine)
+                }.trim()
+            }
         }
         return buildString {
-            appendLine("Request: $prompt")
+            appendLine(if (russian) "Результат" else "Request: $prompt")
             appendLine()
-            appendLine("Executed steps:")
+            if (!russian) {
+                appendLine("Request: $prompt")
+                appendLine()
+            }
+            appendLine(if (russian) "Выполненные шаги:" else "Executed steps:")
             steps.forEach { step ->
                 append("- ")
                 append(step.pluginName)
                 append(" / ")
                 append(step.toolName)
                 append(": ")
-                append(step.result.replace("\n", " ").take(280))
+                append(shorten(step.result, if (russian) 96 else 280))
                 appendLine()
             }
         }.trim()
@@ -1766,6 +2498,21 @@ class ChatViewModel @Inject constructor(
         return result.text
     }
 
+    private fun messagesToAirLlmPrompt(messages: List<JSONObject>): String {
+        return buildString {
+            messages.forEach { json ->
+                val role = json.optString("role", "user").uppercase(Locale.ROOT)
+                val content = json.optString("content", "").trim()
+                if (content.isNotBlank()) {
+                    append(role)
+                    append(": ")
+                    appendLine(content)
+                }
+            }
+            append("ASSISTANT: ")
+        }
+    }
+
     private suspend fun generateWithToolCalls(
         messages: List<JSONObject>,
         maxTokens: Int
@@ -1779,7 +2526,22 @@ class ChatViewModel @Inject constructor(
         var lastRepCheckLen = 0
         var repetitionTrimIndex = -1
 
-        val generationFlow = when (currentTextProviderType) {
+        val officialGatewaySettings = officialGatewaySettingsOrNull()
+        val generationFlow = if (officialGatewaySettings != null) {
+            flow {
+                val response = officialOpenClawGatewayClient.chatCompletion(
+                    rawEndpoint = officialGatewaySettings.officialGatewayEndpoint,
+                    token = officialGatewaySettings.officialGatewayToken,
+                    modelId = officialGatewaySettings.officialGatewayModelId.ifBlank {
+                        OfficialOpenClawGatewayClient.DEFAULT_MODEL_ID
+                    },
+                    messages = messages,
+                    maxTokens = maxTokens,
+                )
+                emit(GenerationEvent.Token(response.text))
+                emit(GenerationEvent.Done)
+            }
+        } else when (currentTextProviderType) {
             ProviderType.GOOGLE_LOCAL -> {
                 val googleMessages = messages.map { json ->
                     GoogleLocalMessage(
@@ -1792,6 +2554,18 @@ class ChatViewModel @Inject constructor(
             ProviderType.GGUF -> {
                 val jsonArray = JSONArray(messages)
                 LlmModelWorker.ggufGenerateMultiTurnStreaming(jsonArray.toString(), maxTokens)
+            }
+            ProviderType.AIRLLM_REMOTE -> flow {
+                val settings = openClawSettingsStore.read()
+                val prompt = messagesToAirLlmPrompt(messages)
+                val response = airLlmGatewayClient.generate(
+                    rawEndpoint = settings.airLlmEndpoint,
+                    modelId = settings.airLlmModelId.ifBlank { activeAirLlmModelId.value.orEmpty() },
+                    prompt = prompt,
+                    maxNewTokens = maxTokens,
+                )
+                emit(GenerationEvent.Token(response.text))
+                emit(GenerationEvent.Done)
             }
             else -> throw IllegalStateException("No text generation model is active")
         }
@@ -1882,8 +2656,7 @@ class ChatViewModel @Inject constructor(
         maxTokens: Int
     ): List<Pair<String, String>> {
         if (currentTextProviderType == ProviderType.GOOGLE_LOCAL) {
-            reportError("Google Local пока не поддерживает OpenClaw tools. Для инструментов загрузите GGUF-модель.")
-            return emptyList()
+            return generateWithToolCalls(messages, maxTokens).toolCalls
         }
         val toolCalls = mutableListOf<Pair<String, String>>()
         val textBuilder = StringBuilder()
@@ -1980,17 +2753,35 @@ class ChatViewModel @Inject constructor(
             .trim()
 
         val browserOpenRegex = Regex(
-            """call\s+the\s+[`"]?(browser|browse|browser_open_url)[`"]?\s+tool\s+with\s+the\s+argument\s+[`"]?([^`"\n]+?)[`"]?(?:[.!]|$)""",
+            """call\s+the\s+[`"]?(browser|browse|browser_open_url|hermes_open_browser)[`"]?\s+tool\s+with\s+the\s+argument\s+[`"]?([^`"\n]+?)[`"]?(?:[.!]|$)""",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
         )
         browserOpenRegex.find(cleaned)?.let { match ->
             val rawUrl = match.groupValues[2].trim()
-            val toolName = "browser_open_url"
+            val enabledNames = PluginManager.getEnabledToolNames().map { it.lowercase(Locale.ROOT) }.toSet()
+            val toolName = if ("hermes_open_browser" in enabledNames) "hermes_open_browser" else "browser_open_url"
             val argsJson = JSONObject().apply {
                 put("tool_calls", JSONArray().apply {
                     put(JSONObject().apply {
                         put("name", toolName)
                         put("arguments", JSONObject().put("url", rawUrl))
+                    })
+                })
+            }.toString()
+            return Pair(toolName, argsJson)
+        }
+
+        val hermesStatusRegex = Regex(
+            """call\s+the\s+[`"]?(hermes|hermes_status|openclaw_status)[`"]?\s+tool(?:[.!]|$)""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
+        if (hermesStatusRegex.containsMatchIn(cleaned)) {
+            val toolName = "hermes_status"
+            val argsJson = JSONObject().apply {
+                put("tool_calls", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("name", toolName)
+                        put("arguments", JSONObject())
                     })
                 })
             }.toString()
@@ -2016,11 +2807,12 @@ class ChatViewModel @Inject constructor(
         }
 
         val locationStatusRegex = Regex(
-            """call\s+the\s+[`"]?(get_location_status|location_status)[`"]?\s+tool(?:[.!]|$)""",
+            """call\s+the\s+[`"]?(get_location_status|location_status|hermes_location_status)[`"]?\s+tool(?:[.!]|$)""",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
         )
         if (locationStatusRegex.containsMatchIn(cleaned)) {
-            val toolName = "get_location_status"
+            val enabledNames = PluginManager.getEnabledToolNames().map { it.lowercase(Locale.ROOT) }.toSet()
+            val toolName = if ("hermes_location_status" in enabledNames) "hermes_location_status" else "get_location_status"
             val argsJson = JSONObject().apply {
                 put("tool_calls", JSONArray().apply {
                     put(JSONObject().apply {
@@ -2058,7 +2850,11 @@ class ChatViewModel @Inject constructor(
      * Returns empty string if no system prompt is configured.
      */
     private suspend fun getCurrentModelSystemPrompt(userQuery: String = ""): String {
-        val basePrompt = getGgufModelSchema().inferenceParams.systemPrompt
+        val basePrompt = if (currentTextProviderType == ProviderType.GGUF) {
+            getGgufModelSchema().inferenceParams.systemPrompt
+        } else {
+            ""
+        }
 
         val hasActiveTools = PluginManager.hasEnabledTools()
             && PluginManager.isToolCallingModelLoaded.value
@@ -2086,15 +2882,33 @@ class ChatViewModel @Inject constructor(
 
     private fun buildOpenClawProfilePrompt(): String {
         val settings = runCatching { openClawSettingsStore.read() }.getOrNull() ?: return ""
-        val skills = settings.selectedSkillIds.joinToString(", ").ifBlank { "browser, files, memory, travel_offline" }
-        val tools = settings.selectedApiToolIds.joinToString(", ").ifBlank { "web_search, browser" }
+        val skills = settings.selectedSkillIds.joinToString(", ").ifBlank { "hermes, browser, files, memory, travel_offline, automation, location_control, airllm, official_openclaw_gateway" }
+        val tools = settings.selectedApiToolIds.joinToString(", ").ifBlank { "hermes, web_search, browser, system_info, location_control, airllm, official_openclaw_gateway" }
         return buildString {
             append("OpenClaw Local mode is active.")
             append("\nPrefer persistent agent behavior, tool-aware reasoning, and resumable task context.")
+            append("\nSelected backend: ")
+            append(settings.defaultBackend.name)
             append("\nEnabled skills: ")
             append(skills)
             append("\nAllowed tool families: ")
             append(tools)
+            append("\nHermes agent layer is available for safe in-app browser handoff, sandboxed file/code write-read-list, sandbox shell scripts, location status, and automation readiness checks.")
+            append("\nUse Hermes tools for local actions when they are enabled; use public Downloads only through the File Manager create_file tool.")
+            append("\nWhen the user asks in Russian, answer in clear short Russian unless a longer report is explicitly requested.")
+            if (settings.defaultBackend == LocalBackendOption.TERMUX_LOCAL || "termux" in settings.selectedSkillIds || "termux" in settings.selectedApiToolIds) {
+                append("\nTermux bridge is available for shell, python, node, git, and longer-running local execution tasks.")
+            }
+            if (settings.defaultBackend == LocalBackendOption.AIRLLM_REMOTE || "airllm" in settings.selectedSkillIds || "airllm" in settings.selectedApiToolIds) {
+                append("\nAirLLM gateway is available as a local/private-LAN Python/PyTorch backend for large Hugging Face models. Use airllm_status before airllm_generate.")
+            }
+            if (settings.defaultBackend == LocalBackendOption.OFFICIAL_GATEWAY ||
+                settings.defaultBackend == LocalBackendOption.TERMUX_LOCAL ||
+                "official_openclaw_gateway" in settings.selectedSkillIds ||
+                "official_openclaw_gateway" in settings.selectedApiToolIds
+            ) {
+                append("\nOfficial OpenClaw Gateway is available through a local/private endpoint. For phone-local mode use openclaw_gateway_termux_bootstrap, openclaw_gateway_termux_start, and openclaw_gateway_termux_status. For already running gateways use openclaw_gateway_status, openclaw_gateway_models, openclaw_gateway_send, and openclaw_gateway_termux_call when raw WebSocket RPC through the official CLI is needed.")
+            }
         }
     }
 
@@ -2318,9 +3132,36 @@ class ChatViewModel @Inject constructor(
         return null
     }
 
-    /** Normalize tool name: "Web Scraping" РІвЂ вЂ™ "web_scraping" */
+    /** Normalize model-emitted tool names to the app's registered tool names. */
     private fun normalizeToolName(toolName: String): String {
-        return toolName.lowercase().replace(" ", "_").replace("-", "_")
+        val normalized = toolName.lowercase(Locale.ROOT).replace(" ", "_").replace("-", "_")
+        return when (normalized) {
+            "open_browser", "browser_open", "open_url", "browse_url" -> "browser_open_url"
+            "write_file", "save_file", "file_write" -> "create_file"
+            "read_file", "file_read" -> "read_text_file"
+            "run_script", "script_run", "shell_script" -> "execute_script"
+            "location_status", "gps_status" -> "get_location_status"
+            "open_location", "location_settings", "gps_settings" -> "open_location_settings"
+            "toggle_location", "gps_toggle" -> "set_location_enabled"
+            "hermes_open_url", "hermes_browser_open" -> "hermes_open_browser"
+            "hermes_file_write", "hermes_save_file" -> "hermes_write_file"
+            "hermes_file_read" -> "hermes_read_file"
+            "hermes_script", "hermes_execute_script" -> "hermes_run_script"
+            "hermes_location", "hermes_gps_status" -> "hermes_location_status"
+            "airllm", "airllm_call", "airllm_chat", "airllm_completion" -> "airllm_generate"
+            "airllm_ready", "airllm_health" -> "airllm_status"
+            "airllm_setup", "airllm_script" -> "airllm_write_gateway_script"
+            "official_openclaw", "openclaw_gateway", "official_gateway", "openclaw_chat" -> "openclaw_gateway_send"
+            "openclaw_gateway_ready", "openclaw_gateway_health", "openclaw_status" -> "openclaw_gateway_status"
+            "openclaw_models", "openclaw_gateway_list_models" -> "openclaw_gateway_models"
+            "openclaw_gateway_setup", "openclaw_setup", "openclaw_gateway_script" -> "openclaw_gateway_write_setup_scripts"
+            "openclaw_gateway_termux_install", "openclaw_termux_bootstrap", "openclaw_termux_install" -> "openclaw_gateway_termux_bootstrap"
+            "openclaw_gateway_termux_run", "openclaw_termux_start", "openclaw_termux_run" -> "openclaw_gateway_termux_start"
+            "openclaw_termux_status", "openclaw_gateway_termux_health" -> "openclaw_gateway_termux_status"
+            "openclaw_termux_call", "openclaw_rpc" -> "openclaw_gateway_termux_call"
+            "openclaw_tool", "openclaw_invoke" -> "openclaw_gateway_tool_invoke"
+            else -> normalized
+        }
     }
 
     /** Filter out tool call syntax and code blocks from generated text. */

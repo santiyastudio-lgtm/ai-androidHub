@@ -288,6 +288,7 @@ internal fun ReloadModelDialog(
     val typeLabel = when (modelType) {
         ProviderType.GGUF -> "Text"
         ProviderType.GOOGLE_LOCAL -> "Google Local"
+        ProviderType.AIRLLM_REMOTE -> "AirLLM"
         ProviderType.DIFFUSION -> "Image"
         ProviderType.TTS -> "TTS"
         ProviderType.TTS_PIPER -> "Piper RU"

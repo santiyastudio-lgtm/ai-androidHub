@@ -591,6 +591,14 @@ fun ModelLoadingScreen(
                             )
                         }
 
+                        ProviderType.AIRLLM_REMOTE -> {
+                            ModelConfig(
+                                modelId = installedModel.id,
+                                modelLoadingParams = """{"type":"airllm_remote","runtime":"python_gateway","endpoint":"http://127.0.0.1:8765"}""",
+                                modelInferenceParams = """{"type":"chat","runtime":"airllm_gateway"}"""
+                            )
+                        }
+
                         ProviderType.DIFFUSION -> {
                             val accelerationMode = AppSettingsDataStore(context)
                                 .accelerationMode
@@ -1066,6 +1074,7 @@ private fun ModelInfoView(
                                 ProviderType.DIFFUSION -> TnIcons.Photo
                                 ProviderType.GGUF -> TnIcons.Sparkles
                                 ProviderType.GOOGLE_LOCAL -> TnIcons.Sparkles
+                                ProviderType.AIRLLM_REMOTE -> TnIcons.Sparkles
                                 ProviderType.TTS, ProviderType.TTS_PIPER -> TnIcons.Volume
                                 ProviderType.ONNX -> TnIcons.Eye
                                 ProviderType.RAW_ASSET -> TnIcons.FileText
@@ -1102,6 +1111,7 @@ private fun ModelInfoView(
                                     text = when (info.providerType) {
                                         ProviderType.GGUF -> "TEXT"
                                         ProviderType.GOOGLE_LOCAL -> "GOOGLE"
+                                        ProviderType.AIRLLM_REMOTE -> "AIRLLM"
                                         ProviderType.DIFFUSION -> "IMAGE"
                                         ProviderType.TTS, ProviderType.TTS_PIPER -> "TTS"
                                         ProviderType.ONNX -> "VISION"

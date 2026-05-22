@@ -80,6 +80,10 @@ class ModelConfigEditorViewModel @Inject constructor() : ViewModel() {
                         _ggufConfig.value = GgufEngineSchema()
                     }
 
+                    ProviderType.AIRLLM_REMOTE -> {
+                        _ggufConfig.value = GgufEngineSchema()
+                    }
+
                     ProviderType.DIFFUSION -> {
                         _diffusionConfig.value = if (config != null) {
                             DiffusionConfig.fromJson(config.modelLoadingParams)
@@ -137,6 +141,15 @@ class ModelConfigEditorViewModel @Inject constructor() : ViewModel() {
                             modelId = model.id,
                             modelLoadingParams = existingConfig?.modelLoadingParams ?: """{"type":"google_local","runtime":"aicore"}""",
                             modelInferenceParams = existingConfig?.modelInferenceParams ?: """{"type":"chat","runtime":"google_local"}"""
+                        )
+                    }
+
+                    ProviderType.AIRLLM_REMOTE -> {
+                        ModelConfig(
+                            id = existingConfig?.id ?: "",
+                            modelId = model.id,
+                            modelLoadingParams = existingConfig?.modelLoadingParams ?: """{"type":"airllm_remote","runtime":"python_gateway","endpoint":"http://127.0.0.1:8765"}""",
+                            modelInferenceParams = existingConfig?.modelInferenceParams ?: """{"type":"chat","runtime":"airllm_gateway"}"""
                         )
                     }
 

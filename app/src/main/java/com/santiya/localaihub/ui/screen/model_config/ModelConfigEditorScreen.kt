@@ -255,6 +255,7 @@ private fun ModelListItem(
                 imageVector = when (model.providerType) {
                     ProviderType.GGUF -> TnIcons.FileText
                     ProviderType.GOOGLE_LOCAL -> TnIcons.Sparkles
+                    ProviderType.AIRLLM_REMOTE -> TnIcons.Sparkles
                     ProviderType.DIFFUSION -> TnIcons.Photo
                     ProviderType.TTS, ProviderType.TTS_PIPER -> TnIcons.Volume
                     ProviderType.ONNX -> TnIcons.Eye
@@ -337,6 +338,12 @@ private fun ConfigEditorPanel(
                     ProviderType.GOOGLE_LOCAL -> {
                         Text(
                             "Google Local использует системный runtime. Здесь доступна только базовая регистрация модели и выбор по умолчанию.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    ProviderType.AIRLLM_REMOTE -> {
+                        Text(
+                            "AirLLM uses an external Python/PyTorch gateway. Configure the endpoint and HF model id in OpenClaw settings.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

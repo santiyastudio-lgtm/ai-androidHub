@@ -1,6 +1,10 @@
 package com.santiya.localaihub.plugins
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -64,6 +68,80 @@ class FileManagerPlugin(private val context: Context) : SuperPlugin {
             "Access denied: path must be inside the app sandbox (${sandbox.path})"
         }
         return resolved
+    }
+
+    private fun isPublicDownloadsPath(path: String): Boolean {
+        val normalized = path.replace('\\', '/').trim()
+        return normalized.startsWith("downloads/", ignoreCase = true) ||
+            normalized.startsWith("/sdcard/download/", ignoreCase = true) ||
+            normalized.startsWith("/storage/emulated/0/download/", ignoreCase = true)
+    }
+
+    private fun normalizeDownloadsDisplayName(path: String): String {
+        val normalized = path.replace('\\', '/').trim().trimStart('/')
+        return normalized.substringAfterLast('/').ifBlank { "export.txt" }
+    }
+
+    private suspend fun writeToPublicDownloads(
+        rawPath: String,
+        content: String,
+        append: Boolean,
+    ): Result<Any> = withContext(Dispatchers.IO) {
+        val displayName = normalizeDownloadsDisplayName(rawPath)
+        val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/"
+        val resolver = context.contentResolver
+
+        val existingUri = resolver.query(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Downloads._ID),
+            "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?",
+            arrayOf(displayName, relativePath),
+            "${MediaStore.Downloads.DATE_MODIFIED} DESC"
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID))
+                android.content.ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+            } else null
+        }
+
+        val targetUri = existingUri ?: resolver.insert(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+                put(MediaStore.Downloads.RELATIVE_PATH, relativePath)
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+            }
+        ) ?: return@withContext Result.failure(IllegalStateException("Failed to create MediaStore entry for Downloads/$displayName"))
+
+        try {
+            resolver.openOutputStream(targetUri, if (append && existingUri != null) "wa" else "wt")?.use { stream ->
+                stream.write(content.toByteArray(Charsets.UTF_8))
+            } ?: return@withContext Result.failure(IllegalStateException("Failed to open Downloads/$displayName for writing"))
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                resolver.update(
+                    targetUri,
+                    ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) },
+                    null,
+                    null
+                )
+            }
+
+            Result.success(
+                FileManagerResponse(
+                    tool = TOOL_CREATE_FILE,
+                    path = "Downloads/$displayName",
+                    content = "File saved to public Downloads successfully (${content.length} characters written)",
+                    fileCount = 1,
+                    success = true
+                )
+            )
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
     }
 
     override fun getPluginInfo(): PluginInfo {
@@ -164,6 +242,10 @@ class FileManagerPlugin(private val context: Context) : SuperPlugin {
         val path = toolCall.getString("path")
         val content = toolCall.getString("content")
         val append = toolCall.getBoolean("append", false)
+
+        if (isPublicDownloadsPath(path)) {
+            return@withContext writeToPublicDownloads(path, content, append)
+        }
 
         val file = resolveSandboxPath(path)
 

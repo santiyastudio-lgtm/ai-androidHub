@@ -6,6 +6,9 @@ import com.santiya.localaihub.viewmodel.OpenClawMode
 enum class LocalBackendOption {
     GGUF_LOCAL,
     GOOGLE_LOCAL,
+    AIRLLM_REMOTE,
+    OFFICIAL_GATEWAY,
+    TERMUX_LOCAL,
     ORCHESTRA_LAN,
 }
 
@@ -19,6 +22,11 @@ data class OpenClawLocalSettings(
     val preferredOpenClawModelId: String? = null,
     val selectedSkillIds: List<String> = emptyList(),
     val selectedApiToolIds: List<String> = emptyList(),
+    val airLlmEndpoint: String = "http://127.0.0.1:8765",
+    val airLlmModelId: String = "",
+    val officialGatewayEndpoint: String = "http://127.0.0.1:18789",
+    val officialGatewayToken: String = "",
+    val officialGatewayModelId: String = "openclaw/default",
     val lastSessionEnabled: Boolean = false,
     val lastSessionMode: OpenClawMode = OpenClawMode.NORMAL,
     val lastSessionChatId: String? = null,
@@ -31,21 +39,27 @@ data class OpenClawLocalSettings(
 )
 
 private val DEFAULT_OPENCLAW_SKILLS = listOf(
+    "hermes",
     "travel_offline",
     "browser",
     "files",
     "memory",
     "automation",
     "location_control",
+    "airllm",
+    "official_openclaw_gateway",
 )
 
 private val DEFAULT_OPENCLAW_API_TOOLS = listOf(
+    "hermes",
     "web_search",
     "browser",
     "api_models",
     "support_logs",
     "system_info",
     "location_control",
+    "airllm",
+    "official_openclaw_gateway",
 )
 
 class OpenClawLocalSettingsStore(context: Context) {
@@ -90,6 +104,14 @@ class OpenClawLocalSettingsStore(context: Context) {
                     if (!prefs.contains("selectedApiToolIds")) DEFAULT_OPENCLAW_API_TOOLS else emptyList()
                 }
                 .orEmpty(),
+            airLlmEndpoint = prefs.getString("airLlmEndpoint", "http://127.0.0.1:8765")
+                ?: "http://127.0.0.1:8765",
+            airLlmModelId = prefs.getString("airLlmModelId", "") ?: "",
+            officialGatewayEndpoint = prefs.getString("officialGatewayEndpoint", "http://127.0.0.1:18789")
+                ?: "http://127.0.0.1:18789",
+            officialGatewayToken = prefs.getString("officialGatewayToken", "") ?: "",
+            officialGatewayModelId = prefs.getString("officialGatewayModelId", "openclaw/default")
+                ?: "openclaw/default",
             lastSessionEnabled = prefs.getBoolean("lastSessionEnabled", false),
             lastSessionMode = lastMode,
             lastSessionChatId = prefs.getString("lastSessionChatId", null),
@@ -113,6 +135,11 @@ class OpenClawLocalSettingsStore(context: Context) {
             .putString("preferredOpenClawModelId", settings.preferredOpenClawModelId)
             .putString("selectedSkillIds", settings.selectedSkillIds.joinToString(","))
             .putString("selectedApiToolIds", settings.selectedApiToolIds.joinToString(","))
+            .putString("airLlmEndpoint", settings.airLlmEndpoint)
+            .putString("airLlmModelId", settings.airLlmModelId)
+            .putString("officialGatewayEndpoint", settings.officialGatewayEndpoint)
+            .putString("officialGatewayToken", settings.officialGatewayToken)
+            .putString("officialGatewayModelId", settings.officialGatewayModelId)
             .putBoolean("lastSessionEnabled", settings.lastSessionEnabled)
             .putString("lastSessionMode", settings.lastSessionMode.name)
             .putString("lastSessionChatId", settings.lastSessionChatId)

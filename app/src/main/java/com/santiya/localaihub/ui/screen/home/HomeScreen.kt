@@ -55,6 +55,7 @@ fun HomeScreen(
     val appState by com.santiya.localaihub.state.AppStateManager.appState.collectAsStateWithLifecycle()
     val installedModels by llmModelViewModel.installedModels.collectAsStateWithLifecycle(initialValue = emptyList())
     val currentModelNameFromVm by llmModelViewModel.currentModelName.collectAsStateWithLifecycle()
+    val activeModelState by llmModelViewModel.activeModelState.collectAsStateWithLifecycle()
     val currentModelName = currentModelNameFromVm
         ?: when (val state = appState) {
             is AppState.ModelLoaded -> state.modelName
@@ -81,6 +82,15 @@ fun HomeScreen(
             onConfirm = { llmModelViewModel.acceptLastModelOffer() },
             onDismiss = { llmModelViewModel.dismissLastModelOffer() }
         )
+    }
+
+    LaunchedEffect(activeModelState, lastModelOffer) {
+        if (lastModelOffer == null &&
+            activeModelState.hasSelection &&
+            activeModelState.installStage != com.santiya.localaihub.data.ActiveModelInstallStage.ACTIVATED
+        ) {
+            llmModelViewModel.resumeSelectedModelIfNeeded()
+        }
     }
 
     CompositionLocalProvider(LocalCodeHighlightEnabled provides codeHighlightEnabled) {

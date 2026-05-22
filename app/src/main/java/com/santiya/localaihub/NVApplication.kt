@@ -6,15 +6,19 @@ import com.santiya.localaihub.data.AppSettingsDataStore
 import com.santiya.localaihub.data.VaultManager
 import com.santiya.localaihub.di.AppContainer
 import com.santiya.localaihub.plugins.CalculatorPlugin
+import com.santiya.localaihub.plugins.AirLlmPlugin
 import com.santiya.localaihub.plugins.BrowserPlugin
 import com.santiya.localaihub.plugins.DateTimePlugin
 import com.santiya.localaihub.plugins.DevUtilsPlugin
 import com.santiya.localaihub.plugins.FileManagerPlugin
+import com.santiya.localaihub.plugins.HermesAgentPlugin
 import com.santiya.localaihub.plugins.LocationControlPlugin
 import com.santiya.localaihub.plugins.NotePadPlugin
+import com.santiya.localaihub.plugins.OfficialOpenClawGatewayPlugin
 import com.santiya.localaihub.plugins.PluginManager
 import com.santiya.localaihub.plugins.ScriptAutomationPlugin
 import com.santiya.localaihub.plugins.SystemInfoPlugin
+import com.santiya.localaihub.plugins.TermuxPlugin
 import com.santiya.localaihub.plugins.WebSearchPlugin
 import com.santiya.localaihub.repo.RagRepository
 import com.santiya.localaihub.tts.TTSDataStore
@@ -47,12 +51,16 @@ class NVApplication : Application() {
 
         // Register plugins
         PluginManager.registerPlugin(WebSearchPlugin())
+        PluginManager.registerPlugin(AirLlmPlugin(applicationContext))
+        PluginManager.registerPlugin(OfficialOpenClawGatewayPlugin(applicationContext))
         PluginManager.registerPlugin(BrowserPlugin())
         PluginManager.registerPlugin(CalculatorPlugin())
         PluginManager.registerPlugin(DateTimePlugin())
         PluginManager.registerPlugin(DevUtilsPlugin())
         PluginManager.registerPlugin(FileManagerPlugin(applicationContext))
+        PluginManager.registerPlugin(HermesAgentPlugin(applicationContext))
         PluginManager.registerPlugin(ScriptAutomationPlugin(com.santiya.localaihub.global.AppPaths.workspaceFiles(applicationContext)))
+        PluginManager.registerPlugin(TermuxPlugin(applicationContext))
         PluginManager.registerPlugin(NotePadPlugin())
         PluginManager.registerPlugin(SystemInfoPlugin(applicationContext))
         PluginManager.registerPlugin(LocationControlPlugin(applicationContext))

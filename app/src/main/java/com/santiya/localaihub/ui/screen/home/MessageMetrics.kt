@@ -72,7 +72,7 @@ internal fun MetricsDisplay(metrics: DecodingMetrics, memoryMetrics: MemoryMetri
                     )
 
                     Text(
-                        text = "вЂў",
+                        text = "•",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )
@@ -249,7 +249,7 @@ internal fun MemoryMetricsDisplay(metrics: MemoryMetrics) {
 
                     if (metrics.peakMemoryMB > 0) {
                         Text(
-                            text = "вЂў",
+                            text = "•",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )
@@ -368,7 +368,7 @@ internal fun ImageMetricsDisplay(metrics: ImageGenerationMetrics) {
                     )
 
                     Text(
-                        text = "вЂў",
+                        text = "•",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )

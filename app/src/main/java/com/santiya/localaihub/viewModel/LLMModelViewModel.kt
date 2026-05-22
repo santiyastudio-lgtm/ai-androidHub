@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -67,6 +68,7 @@ class LLMModelViewModel @Inject constructor(
             models.filter { model ->
                 model.providerType == ProviderType.GGUF ||
                     model.providerType == ProviderType.GOOGLE_LOCAL ||
+                    model.providerType == ProviderType.AIRLLM_REMOTE ||
                     model.providerType == ProviderType.DIFFUSION
             }
         }
@@ -111,27 +113,51 @@ class LLMModelViewModel @Inject constructor(
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            val persisted = appSettings.activeModelStateSnapshot()
-            if (persisted.hasSelection) {
-                _activeModelState.value = persisted
-                _currentModelID.value = persisted.modelId.orEmpty()
-                _currentModelType.value = persisted.providerTypeName?.let { runCatching { ProviderType.valueOf(it) }.getOrNull() }
-                if (persisted.installStage == ActiveModelInstallStage.ACTIVATED && !persisted.modelName.isNullOrBlank()) {
-                    AppStateManager.setModelLoaded(persisted.modelName)
+            appSettings.activeModelState
+                .distinctUntilChanged()
+                .collect { persisted ->
+                    _activeModelState.value = persisted
+                    if (persisted.installStage == ActiveModelInstallStage.ACTIVATED) {
+                        _currentModelID.value = persisted.modelId.orEmpty()
+                        _currentModelType.value = persisted.providerTypeName?.let {
+                            runCatching { ProviderType.valueOf(it) }.getOrNull()
+                        }
+                        if (!persisted.modelName.isNullOrBlank()) {
+                            AppStateManager.setModelLoaded(persisted.modelName)
+                        }
+                    } else if (_currentModelID.value.isBlank()) {
+                        _currentModelType.value = persisted.providerTypeName?.let {
+                            runCatching { ProviderType.valueOf(it) }.getOrNull()
+                        }
+                        if (!persisted.hasSelection) {
+                            _currentModelType.value = null
+                        }
+                    }
                 }
-            }
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val savedId = appSettings.lastModelId.first()
+            val persistedSelection = appSettings.activeModelStateSnapshot()
+            val savedId = persistedSelection.modelId
+                ?: appSettings.lastModelId.first()
                 ?: openClawSettingsStore.read().takeIf { it.enabledByDefault }?.preferredOpenClawModelId
                 ?: return@launch
-            if (_currentModelID.value.isNotEmpty()) return@launch
+            val runtimeModelId =
+                LlmModelWorker.currentGoogleLocalModelId.value
+                    ?: LlmModelWorker.currentGgufModelId.value
+                    ?: LlmModelWorker.currentDiffusionModelId.value
+            val hasActiveRuntimeSelection = runtimeModelId == savedId
+            if (hasActiveRuntimeSelection) return@launch
             val model = repository.getModelById(savedId) ?: return@launch
             if (!model.isActive) return@launch
             try {
                 LlmModelWorker.ensureServiceReady()
             } catch (_: Exception) {
+                return@launch
+            }
+
+            if (persistedSelection.hasSelection && persistedSelection.modelId == savedId) {
+                loadModel(model)
                 return@launch
             }
 
@@ -167,6 +193,11 @@ class LLMModelViewModel @Inject constructor(
             }.collect { active ->
                 if (active == null) {
                     val persisted = _activeModelState.value
+                    if (persisted.providerTypeName == ProviderType.AIRLLM_REMOTE.name &&
+                        persisted.installStage == ActiveModelInstallStage.ACTIVATED
+                    ) {
+                        return@collect
+                    }
                     if (persisted.installStage == ActiveModelInstallStage.ACTIVATED) {
                         setActiveModelState(
                             persisted.copy(
@@ -236,6 +267,32 @@ class LLMModelViewModel @Inject constructor(
         loadModel(model)
     }
 
+    fun resumeSelectedModelIfNeeded() {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (_currentModelID.value.isNotEmpty()) return@launch
+
+            val persisted = appSettings.activeModelStateSnapshot()
+            if (!persisted.hasSelection) return@launch
+
+            val modelId = persisted.modelId ?: appSettings.lastModelId.first() ?: return@launch
+            val askDialog = appSettings.askModelReloadDialog.first()
+            if (askDialog) return@launch
+
+            val model = repository.getModelById(modelId) ?: return@launch
+            if (!model.isActive) return@launch
+
+            try {
+                LlmModelWorker.ensureServiceReady()
+            } catch (_: Exception) {
+                return@launch
+            }
+
+            if (_currentModelID.value.isEmpty()) {
+                loadModel(model)
+            }
+        }
+    }
+
     val isGgufModelLoaded = LlmModelWorker.isGgufModelLoaded
     val isGoogleLocalModelLoaded = LlmModelWorker.isGoogleLocalModelLoaded
     val isDiffusionModelLoaded = LlmModelWorker.isDiffusionModelLoaded
@@ -278,6 +335,7 @@ class LLMModelViewModel @Inject constructor(
                 when (model.providerType) {
                     ProviderType.GGUF -> loadGgufModel(model, config)
                     ProviderType.GOOGLE_LOCAL -> loadGoogleLocalModel(model)
+                    ProviderType.AIRLLM_REMOTE -> loadAirLlmRemoteModel(model)
                     ProviderType.DIFFUSION -> loadDiffusionModel(model, config)
                     ProviderType.TTS,
                     ProviderType.TTS_PIPER,
@@ -412,6 +470,22 @@ class LLMModelViewModel @Inject constructor(
         }
     }
 
+    private suspend fun loadAirLlmRemoteModel(model: Model) {
+        setActiveModelState(
+            ActiveModelState(
+                modelId = model.id,
+                modelName = model.modelName,
+                providerTypeName = ProviderType.AIRLLM_REMOTE.name,
+                installStage = ActiveModelInstallStage.ACTIVATED,
+                activationState = ActiveModelActivationState.ACTIVE,
+            )
+        )
+        appSettings.saveLastModelId(model.id)
+        AppStateManager.setModelLoaded("${model.modelName} (AirLLM gateway)")
+        com.santiya.localaihub.plugins.PluginManager.setToolCallingModelLoaded(false)
+        com.santiya.localaihub.plugins.PluginManager.togglePlugin("AirLLM Gateway", true)
+    }
+
     private suspend fun loadDiffusionModel(model: Model, config: ModelConfig) {
         val storedConfig = DiffusionConfig.fromJson(config.modelLoadingParams)
         val accelerationMode = appSettings.accelerationMode.first()
@@ -474,6 +548,9 @@ class LLMModelViewModel @Inject constructor(
                     LlmModelWorker.stopDiffusionBackend()
                     LlmModelWorker.setCurrentDiffusionModelId(null)
                 }
+                ProviderType.AIRLLM_REMOTE -> {
+                    com.santiya.localaihub.plugins.PluginManager.togglePlugin("AirLLM Gateway", false)
+                }
                 else -> Unit
             }
             setActiveModelState(ActiveModelState())
@@ -498,6 +575,9 @@ class LLMModelViewModel @Inject constructor(
                     ProviderType.DIFFUSION -> {
                         LlmModelWorker.stopDiffusionBackend()
                         LlmModelWorker.setCurrentDiffusionModelId(null)
+                    }
+                    ProviderType.AIRLLM_REMOTE -> {
+                        com.santiya.localaihub.plugins.PluginManager.togglePlugin("AirLLM Gateway", false)
                     }
                     else -> Unit
                 }

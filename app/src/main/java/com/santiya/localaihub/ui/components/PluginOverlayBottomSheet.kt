@@ -351,7 +351,7 @@ private fun PluginListItem(
                                     .padding(vertical = Standards.SpacingXxs)
                             ) {
                                 Text(
-                                    text = "вЂў ",
+                                    text = "• ",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.tertiary
                                 )
