@@ -70,3 +70,18 @@ app/build/outputs/apk/debug/
 
 Поддержка через Telegram Stars:
 - нажмите кнопку поддержки у `@SantiyaSupportBot`, чтобы отправить поддержку через Stars прямо боту
+
+<!-- SANTIYA_SUPPORT_START -->
+## Support / Поддержать проект
+
+Cards / Карты:
+
+- T-Bank card (RF only): `2200701933182781`
+- Ozon Bank card (RF only): `2204320688009192`
+
+Wallets / Кошельки:
+
+- Solana: `97j3xnrjHtM5dDUZ8xAkAKqxY1Axro4gvsPCkqgZKQTj`
+- Ethereum: `0x061dE20Bb9b2fA9c1C3d8E38939092aCB76284fe`
+- Bitcoin: `bc1qfyzhnhajm8rslkhell9mg54na2tla90e6dkf3d`
+<!-- SANTIYA_SUPPORT_END -->
