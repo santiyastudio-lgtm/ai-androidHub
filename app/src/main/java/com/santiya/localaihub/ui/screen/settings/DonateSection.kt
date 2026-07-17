@@ -36,11 +36,10 @@ private data class DonateEndpoint(
 )
 
 private val donateEndpoints = listOf(
-    DonateEndpoint("Solana", "Solana", "97j3xnrjHtM5dDUZ8xAkAKqxY1Axro4gvsPCkqgZKQTj"),
-    DonateEndpoint("Ethereum", "Ethereum", "0x061dE20Bb9b2fA9c1C3d8E38939092aCB76284fe"),
-    DonateEndpoint("Bitcoin", "Bitcoin", "bc1qfyzhnhajm8rslkhell9mg54na2tla90e6dkf3d"),
-    DonateEndpoint("T-Bank карта", "T-Bank card", "2200701933182781", noteRu = "Только РФ", noteEn = "RF only"),
-    DonateEndpoint("Ozon Bank карта", "Ozon Bank card", "2204320688009192", noteRu = "Только РФ", noteEn = "RF only"),
+    DonateEndpoint("Bitcoin (BTC)", "Bitcoin (BTC)", "bc1qhft9dxkn0g07zm9ht8zrfqyrh85djhueu4q49k", noteRu = "Сеть Bitcoin", noteEn = "Bitcoin network"),
+    DonateEndpoint("Ethereum (ETH)", "Ethereum (ETH)", "0x5311B0318A24F63196A572b447609bc336A4C7b2", noteRu = "Сеть Ethereum", noteEn = "Ethereum network"),
+    DonateEndpoint("Solana (SOL)", "Solana (SOL)", "9i76uPGouNh8KVB8LtippfFY7p6kG2ZSLbtLwPqb6i76", noteRu = "Сеть Solana", noteEn = "Solana network"),
+    DonateEndpoint("USDT (Solana)", "USDT (Tether, Solana)", "9i76uPGouNh8KVB8LtippfFY7p6kG2ZSLbtLwPqb6i76", noteRu = "Сеть Solana (SPL)", noteEn = "Solana network (SPL)"),
 )
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -76,8 +75,8 @@ internal fun DonateQuickSection() {
                     )
                     Text(
                         localizedText(
-                            "Кошельки и карты для поддержки проекта. Telegram-бот здесь не используется для доната.",
-                            "Wallets and cards for supporting the project. The Telegram bot is not used for donations here."
+                            "Кошельки для поддержки проекта.",
+                            "Wallets for supporting the project."
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -85,7 +84,6 @@ internal fun DonateQuickSection() {
                 }
             }
             DonateDestinations(context)
-            StarsSupportCard()
         }
     }
 }
@@ -133,42 +131,6 @@ private fun DonateDestinations(context: Context) {
 }
 
 @Composable
-private fun StarsSupportCard() {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(Standards.RadiusLg),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = Standards.SpacingMd, vertical = Standards.SpacingSm),
-            horizontalArrangement = Arrangement.spacedBy(Standards.SpacingSm),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = TnIcons.Star,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = localizedText("Поддержка звёздами", "Support with stars"),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = localizedText(
-                        "Можно поддержать проект, отправив звёзды боту @SantiyaSupportBot.",
-                        "You can support the project by sending stars to @SantiyaSupportBot."
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
 
 private fun copyToClipboard(context: Context, label: String, value: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
