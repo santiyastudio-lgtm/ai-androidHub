@@ -155,24 +155,12 @@ fun SettingsScreen(
                 apiModelsSection(appLanguageSettings.language, onApiModelsClick)
             }
 
-            if (settingsMatches(settingsQuery, "openclaw", "Р»РѕРєР°Р»", "local", "backend", "gemma", "РѕСЂРєРµСЃС‚СЂ", "agent", "skills", "termux", "browser", "airllm", "hf", "large models", "gateway", "official", "openclaw gateway")) {
-                openClawLocalSection(
+            if (settingsMatches(settingsQuery, "hermes", "Р»РѕРєР°Р»", "local", "agent", "skills", "browser", "gguf", "model", "tools")) {
+                hermesLocalSection(
                     language = appLanguageSettings.language,
                     settings = openClawLocalSettings,
-                    installedModels = installedModels,
-                    onBackendSelected = { viewModel.setOpenClawBackend(it) },
                     onEnabledByDefaultChange = { viewModel.setOpenClawEnabledByDefault(it) },
-                    onPreferredModelSelected = { viewModel.setOpenClawPreferredModel(it) },
-                    onSkillToggle = { viewModel.toggleOpenClawSkill(it) },
-                    onApiToolToggle = { viewModel.toggleOpenClawApiTool(it) },
-                    onAirLlmEndpointChange = { viewModel.setOpenClawAirLlmEndpoint(it) },
-                    onAirLlmModelIdChange = { viewModel.setOpenClawAirLlmModelId(it) },
-                    onOfficialGatewayEndpointChange = { viewModel.setOpenClawOfficialGatewayEndpoint(it) },
-                    onOfficialGatewayTokenChange = { viewModel.setOpenClawOfficialGatewayToken(it) },
-                    onOfficialGatewayModelIdChange = { viewModel.setOpenClawOfficialGatewayModelId(it) },
                     onAutoUseRecommendedChange = { viewModel.setOpenClawAutoUseRecommendedModel(it) },
-                    onPreferProjectorChange = { viewModel.setOpenClawPreferProjector(it) },
-                    onShowAdvancedBackendsChange = { viewModel.setOpenClawShowAdvancedBackends(it) }
                 )
             }
 

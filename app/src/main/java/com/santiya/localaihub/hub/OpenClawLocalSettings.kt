@@ -18,7 +18,7 @@ data class OpenClawLocalSettings(
     val autoUseRecommendedModel: Boolean = true,
     val preferMultimodalProjector: Boolean = true,
     val showAdvancedBackends: Boolean = false,
-    val enabledByDefault: Boolean = false,
+    val enabledByDefault: Boolean = true,
     val preferredOpenClawModelId: String? = null,
     val selectedSkillIds: List<String> = emptyList(),
     val selectedApiToolIds: List<String> = emptyList(),
@@ -46,8 +46,6 @@ private val DEFAULT_OPENCLAW_SKILLS = listOf(
     "memory",
     "automation",
     "location_control",
-    "airllm",
-    "official_openclaw_gateway",
 )
 
 private val DEFAULT_OPENCLAW_API_TOOLS = listOf(
@@ -58,20 +56,23 @@ private val DEFAULT_OPENCLAW_API_TOOLS = listOf(
     "support_logs",
     "system_info",
     "location_control",
-    "airllm",
-    "official_openclaw_gateway",
 )
 
 class OpenClawLocalSettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("openclaw_local_settings", Context.MODE_PRIVATE)
 
     fun read(): OpenClawLocalSettings {
-        val backend = runCatching {
+        val storedBackend = runCatching {
             LocalBackendOption.valueOf(
                 prefs.getString("defaultBackend", LocalBackendOption.GGUF_LOCAL.name)
                     ?: LocalBackendOption.GGUF_LOCAL.name
             )
         }.getOrDefault(LocalBackendOption.GGUF_LOCAL)
+        val backend = if (storedBackend == LocalBackendOption.GGUF_LOCAL) {
+            LocalBackendOption.GGUF_LOCAL
+        } else {
+            LocalBackendOption.GGUF_LOCAL
+        }
         val lastMode = runCatching {
             OpenClawMode.valueOf(
                 prefs.getString("lastSessionMode", OpenClawMode.NORMAL.name)
@@ -86,12 +87,12 @@ class OpenClawLocalSettingsStore(context: Context) {
             autoUseRecommendedModel = prefs.getBoolean("autoUseRecommendedModel", true),
             preferMultimodalProjector = prefs.getBoolean("preferMultimodalProjector", true),
             showAdvancedBackends = prefs.getBoolean("showAdvancedBackends", false),
-            enabledByDefault = prefs.getBoolean("enabledByDefault", false),
+            enabledByDefault = prefs.getBoolean("enabledByDefault", true),
             preferredOpenClawModelId = prefs.getString("preferredOpenClawModelId", null),
             selectedSkillIds = prefs.getString("selectedSkillIds", "")
                 ?.split(',')
                 ?.map { it.trim() }
-                ?.filter { it.isNotBlank() }
+                ?.filter { it in DEFAULT_OPENCLAW_SKILLS }
                 ?.ifEmpty {
                     if (!prefs.contains("selectedSkillIds")) DEFAULT_OPENCLAW_SKILLS else emptyList()
                 }
@@ -99,7 +100,7 @@ class OpenClawLocalSettingsStore(context: Context) {
             selectedApiToolIds = prefs.getString("selectedApiToolIds", "")
                 ?.split(',')
                 ?.map { it.trim() }
-                ?.filter { it.isNotBlank() }
+                ?.filter { it in DEFAULT_OPENCLAW_API_TOOLS }
                 ?.ifEmpty {
                     if (!prefs.contains("selectedApiToolIds")) DEFAULT_OPENCLAW_API_TOOLS else emptyList()
                 }

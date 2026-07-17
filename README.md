@@ -1,5 +1,12 @@
 # SantiyaLocalAiHub
 
+## Hermes Local agent
+
+The default agent is now **Hermes Local**. It runs a GGUF model on the device,
+uses the app's sandboxed Hermes tools, and does not start or connect to an
+OpenClaw Gateway. The recommended local model is
+`NousResearch/Hermes-3-Llama-3.1-8B-GGUF:Q4_K_M`.
+
 Android-приложение для локальной работы с AI-моделями, GGUF-импорта, Gemma, OpenClaw Local и офлайн-инструментов.
 
 ## Статус

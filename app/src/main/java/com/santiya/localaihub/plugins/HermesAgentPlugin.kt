@@ -59,13 +59,13 @@ class HermesAgentPlugin(
     override fun getPluginInfo(): PluginInfo {
         return PluginInfo(
             name = PLUGIN_NAME,
-            description = "OpenClaw Hermes layer for browser handoff, file/code output, location status, and local automation readiness",
+            description = "Local Hermes tools for browser handoff, file/code output, location status, and sandboxed automation",
             author = "SantiyaLocalAiHub",
             version = "1.0.0",
             toolDefinitionBuilder = listOf(
                 ToolDefinitionBuilder(
                     TOOL_STATUS,
-                    "Report the local Hermes/OpenClaw tool readiness inside this Android app"
+                    "Report local Hermes tool readiness inside this Android app"
                 ),
                 ToolDefinitionBuilder(
                     TOOL_OPEN_BROWSER,
@@ -156,7 +156,7 @@ class HermesAgentPlugin(
             action = TOOL_STATUS,
             success = true,
             message = buildString {
-                append("Hermes agent mode is ready inside OpenClaw Local. ")
+                append("Hermes local agent mode is ready. ")
                 append("Browser, file write/read/list, sandbox script execution, memory context, and location status tools are registered. ")
                 append("Termux: ${termuxStatus.message} ")
                 append("Location services: ${if (location) "enabled" else "disabled"}. ")

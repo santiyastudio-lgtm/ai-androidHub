@@ -14,7 +14,6 @@ import com.santiya.localaihub.plugins.FileManagerPlugin
 import com.santiya.localaihub.plugins.HermesAgentPlugin
 import com.santiya.localaihub.plugins.LocationControlPlugin
 import com.santiya.localaihub.plugins.NotePadPlugin
-import com.santiya.localaihub.plugins.OfficialOpenClawGatewayPlugin
 import com.santiya.localaihub.plugins.PluginManager
 import com.santiya.localaihub.plugins.ScriptAutomationPlugin
 import com.santiya.localaihub.plugins.SystemInfoPlugin
@@ -52,7 +51,6 @@ class NVApplication : Application() {
         // Register plugins
         PluginManager.registerPlugin(WebSearchPlugin())
         PluginManager.registerPlugin(AirLlmPlugin(applicationContext))
-        PluginManager.registerPlugin(OfficialOpenClawGatewayPlugin(applicationContext))
         PluginManager.registerPlugin(BrowserPlugin())
         PluginManager.registerPlugin(CalculatorPlugin())
         PluginManager.registerPlugin(DateTimePlugin())
